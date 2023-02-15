@@ -115,6 +115,11 @@ fn resnet(
 }
 
 
+#[allow(dead_code)]
 pub fn resnet18(vs: &nn::Path, num_classes: i64) -> nn::FuncT<'static> {
     return resnet(vs, 2, 2, 2, 2, num_classes);
+}
+
+pub fn resnet34(vs: &nn::Path, num_classes: i64) -> nn::FuncT<'static> {
+    return resnet(vs, 3, 4, 6, 3, num_classes);
 }

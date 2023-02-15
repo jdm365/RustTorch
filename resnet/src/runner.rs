@@ -1,18 +1,19 @@
 use anyhow::Result;
 use tch::{nn, Device, nn::ModuleT, nn::OptimizerConfig};
 
-use crate::resnet::resnet18;
+//use crate::resnet::resnet18;
+use crate::resnet::resnet34;
 
 const BATCH_SIZE: i64 = 256;
-const N_EPOCHS: i64 = 10;
-const LR: f64 = 1e-2;
+const N_EPOCHS: i64 = 30;
+const LR: f64 = 1e-3;
 
 pub fn run(data: &str) -> Result<()> {
     // default to data if not provided
     let data = if data.is_empty() { "data" } else { data };
     let m = tch::vision::mnist::load_dir(data)?;
     let vs = nn::VarStore::new(Device::cuda_if_available());
-    let model = resnet18(&vs.root(), 10);
+    let model = resnet34(&vs.root(), 10);
     let mut opt = nn::Adam::default().build(&vs, LR)?;
     for epoch in 0..N_EPOCHS {
         for (bimages, blabels) in m.train_iter(BATCH_SIZE).shuffle().to_device(vs.device()) {
