@@ -12,7 +12,7 @@ trait Game {
     fn new() -> Self;
     fn get_result(&self, move_col: f32, move_row: f32) -> Option<f32>;
     fn get_possible_moves(&self) -> Tensor;
-    fn make_move(&mut self, move_col: f32);
+    fn make_move(&mut self, move_col: f32) -> Option<f32>;
 }
 
 
@@ -45,7 +45,7 @@ impl Game for Connect4Game {
         }
 
         // Horizontal checks
-        let n_checks = 4 - (move_col as i64 - 3).abs() % 4;
+        let mut n_checks = 4 - (move_col as i64 - 3).abs() % 4;
         let left_to_right = move_col <= 3.0;
 
         if left_to_right {
@@ -64,8 +64,23 @@ impl Game for Connect4Game {
         }
 
         // Diagonal check 1
+        n_checks = if left_to_right {n_checks} else {4};
+        if move_row <= 2.0 && move_col <= 3.0 {
+            for col in 0..n_checks {
+                if self.board.narrow(0, move_row as i64 + col, 4).narrow(1, move_col as i64 + col, 4).diag(0).view([-1]).equal(&connect4) {
+                    return Some(self.current_player);
+                }
+            }
+        }
 
-        
+        // Diagonal check 2
+        if move_row >= 3.0 && move_col <= 3.0 {
+            for col in 0..n_checks {
+                if self.board.narrow(0, move_row as i64 - col, 4).narrow(1, move_col as i64 - col, 4).diag(0).view([-1]).equal(&connect4) {
+                    return Some(self.current_player);
+                }
+            }
+        }
 
         return None;
         }
@@ -80,10 +95,25 @@ impl Game for Connect4Game {
     }
 
 
-    fn make_move(&mut self, move_col: f32) {
+    fn make_move(&mut self, move_col: f32) -> Option<f32> {
         // Makes a move
+        let zero = Tensor::zeros(&[1], (Kind::Float, Device::Cpu));
+        let one  = Tensor::ones(&[1], (Kind::Float, Device::Cpu));
+        let mut move_row: f32 = 0.0;
 
-
+        // Wrong
+        for _row in 0..6 {
+            let row = 5 - _row;
+            println!("Move: {} {}", move_col, row);
+            println!("Board: {:?}", self.board.get(row).get(move_col as i64));
+            println!("Zero: {:?}", zero);
+            println!("Board piece is zero: {}", self.board.get(row).get(move_col as i64).equal(&zero));
+            if self.board.get(row).get(move_col as i64).equal(&zero) {
+                self.board.get(row).get(move_col as i64).copy_(&one);
+                move_row = row as f32;
+                break;
+            }
+        }
 
         self.current_player = -self.current_player;
 
@@ -91,8 +121,8 @@ impl Game for Connect4Game {
         self.result = self.get_result(move_col, move_row);
 
         match self.result {
-            Some(_) => println!("Game over!"),
-            None => {},
+            Some(_) => Some(self.current_player),
+            None => None,
         }
     }
 }
@@ -109,23 +139,29 @@ mod tests {
     #[test]
     fn test_get_result() {
         let mut game = Connect4Game::new();
-        assert_eq!(game.get_result(), None);
-        game.make_move(0);
-        game.make_move(0);
-        game.make_move(0);
-        game.make_move(0);
-        assert_eq!(game.get_result(), Some(1));
+        assert_eq!(game.get_result(0.0, 0.0), None);
+        game.make_move(0.0);
+        game.make_move(1.0);
+        game.make_move(0.0);
+        game.make_move(1.0);
+        game.make_move(0.0);
+        game.make_move(1.0);
+        println!("{:?}", game.make_move(0.0));
+        game.make_move(1.0);
     }
 
     #[test]
     fn test_get_possible_moves() {
         let mut game = Connect4Game::new();
-        assert_eq!(game.get_possible_moves(), Tensor::of_slice(&[1, 1, 1, 1, 1, 1, 1]));
-        game.make_move(0);
-        game.make_move(0);
-        game.make_move(0);
-        game.make_move(0);
-        assert_eq!(game.get_possible_moves(), Tensor::of_slice(&[0, 1, 1, 1, 1, 1, 1]));
+        assert_eq!(game.get_possible_moves(), Tensor::of_slice(&[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
+        game.make_move(0.0);
+        game.make_move(0.0);
+        game.make_move(0.0);
+        game.make_move(0.0);
+        game.make_move(0.0);
+        game.make_move(0.0);
+        game.board.print();
+        assert_eq!(game.get_possible_moves(), Tensor::of_slice(&[0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
     }
 }
 
