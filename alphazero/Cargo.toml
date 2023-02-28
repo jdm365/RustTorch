@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 tch = {version = "~0.10.1"}
 anyhow = "~1.0.40"
+rand = "~0.8.3"
