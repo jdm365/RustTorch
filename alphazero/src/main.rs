@@ -1,31 +1,26 @@
 #![allow(unused_imports)]
 
 use rand::Rng; 
+use std::thread;
 
-mod game;
-use crate::game::Game;
-use crate::game::Connect4Game;
+mod connect4;
+use crate::connect4::Connect4Funcs;
+use crate::connect4::Connect4Game;
 
-mod game_torch;
-use crate::game_torch::GameTorch;
-use crate::game_torch::Connect4GameTorch;
+pub mod chess_game;
+use crate::chess_game::ChessFuncs;
+use crate::chess_game::ChessGame;
+
+mod mcts;
+use crate::mcts::NodeFuncs;
+use crate::mcts::Node;
+
+pub mod move_map;
 
 
-
-fn play_game_torch(game: &mut Connect4GameTorch) {
-    loop {
-        let action = rand::thread_rng().gen_range(0..7) as f32;
-        match game.make_move(action) {
-            Some(_) => {
-                break;
-            },
-            None => {},
-        }
-    }
-    game.reset_board();
-}
-
-fn play_game(game: &mut Connect4Game) {
+#[allow(dead_code)]
+fn play_game_connect4() {
+    let mut game = Connect4Game::new();
     loop {
         let action = rand::thread_rng().gen_range(0..7);
         match game.make_move(action) {
@@ -35,28 +30,32 @@ fn play_game(game: &mut Connect4Game) {
             None => {},
         }
     }
-    game.reset_board();
+}
+
+fn play_game_chess() {
+    let mut game = ChessGame::new();
+    for _ in 0..200 {
+        // End game after 100 moves if not ended
+        match game.make_move_random() {
+            Some(_) => {
+                break;
+            },
+            None => {},
+        }
+    }
 }
 
 
 fn main() {
-    const N_GAMES: usize = 10000;
+    const N_GAMES: usize = 100_000;
 
-    // Torch Version
-    let mut game = Connect4GameTorch::new();
     for i in 0..N_GAMES {
-        play_game_torch(&mut game);
+        // play_game_connect4(&mut game);
+        thread::spawn(move || {
+            play_game_chess();
+        });
 
-        if (i+1) % 100 == 0 {
-            println!("Game {} of {}", i+1, N_GAMES);
-        }
-    }
-
-    let mut game = Connect4Game::new();
-    for i in 0..N_GAMES {
-        play_game(&mut game);
-
-        if (i+1) % 100 == 0 {
+        if (i+1) % 1000 == 0 {
             println!("Game {} of {}", i+1, N_GAMES);
         }
     }

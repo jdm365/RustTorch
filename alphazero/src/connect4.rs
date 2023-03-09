@@ -6,7 +6,7 @@ pub struct Connect4Game {
 }
 
 
-pub trait Game {
+pub trait Connect4Funcs {
     fn new() -> Self;
     fn get_result(&self, move_col: usize, move_row: usize) -> Option<i8>;
     fn get_possible_moves(&self) -> Vec<i8>;
@@ -23,7 +23,7 @@ fn relu(x: i8) -> i8 {
 }
 
 
-impl Game for Connect4Game {
+impl Connect4Funcs for Connect4Game {
     fn new() -> Self {
         Connect4Game {
             board: [0; 42],
