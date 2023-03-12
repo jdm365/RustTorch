@@ -10,25 +10,25 @@ use crate::chess_game::ChessFuncs;
 // 1 Node ~= 25 KB. If m simulations and n threads (concurrent games),
 // then m x n x 25 KB are required. E.g. 16 threads 800 sims -> ~200 MB.
 
-pub struct Node {
-    game: ChessGame,
+pub struct Node<'a> {
+    game: ChessGame<'a>,
     visit_count: usize,
     value_sum: f32,
-    child_nodes: HashMap<i32, Node>,   // key, value = move_idx, Node
+    child_nodes: HashMap<usize, Node<'a>>,   // key, value = move_idx, Node
     prior: f32,
 }
 
 
 pub trait NodeFuncs {
     fn new(game: ChessGame, prior: f32) -> Self;
-    fn expand(&mut self, probs: [&f32; 1744]) -> ();
+    fn expand(&mut self, probs: &Vec<f32>) -> ();
     fn expanded(&self) -> bool;
     fn calc_ucb(&self, child: &Node) -> f32;
     fn select_move(&self) -> Node;
 }
 
 
-impl NodeFuncs for Node {
+impl<'a> NodeFuncs for Node<'a> {
     fn new(_game: ChessGame, _prior: f32) -> Self {
         Node {
             game: _game,
@@ -39,25 +39,22 @@ impl NodeFuncs for Node {
         }
     }
 
-    fn expand(&mut self, probs: &[f32; 1744]) -> () {
+    fn expand(&mut self, probs: &Vec<f32>) -> () {
         // Mask illegal moves
-        let move_probs = probs.iter()
-                              .zip(self.game.get_move_mask().iter())
-                              .map(|(&a, &b)| a * b)
-                              .collect::<Vec<f32>>()
-                              .try_into()
-                              .unwrap();
-        move_probs /= move_probs.sum();
-
+        let move_mask = self.game.get_move_mask();
+        let mut move_probs = move_mask.iter().zip(probs.iter()).map(|(&x, &y)| x * y).collect::<Vec<_>>();
+        let sum = move_probs.iter().sum();
+        move_probs = move_probs.iter().map(|&x| x / sum).collect::<Vec<_>>();
+        
         // Create new nodes for all moves.
-        for move_idx in 0..1744 {
+        for move_idx in 0..1968 {
             if move_probs[move_idx] == 0.00 {
                 continue;
             }
 
             let new_game = self.game.make_move(move_idx);
             self.child_nodes[move_idx] = Node::new(
-                &new_game, 
+                &new_game,
                 move_probs[move_idx] 
             );
         }
@@ -96,8 +93,8 @@ impl NodeFuncs for Node {
 fn run_mcts_sim(
     game: &ChessGame, 
     node: Node, 
-    policy_net: &nn::ModuleT, 
-    value_net:  &nn::ModuleT
+    policy_net: &dyn nn::ModuleT, 
+    value_net:  &dyn nn::ModuleT
     ) {
     /*
     MCTS: 4 steps
@@ -117,13 +114,13 @@ fn run_mcts_sim(
         node = node.select_move();
         search_path.push(&node);
     }
-    let probs  = policy_net(node.game.get_board());
-    let values = value_net(node.game.get_board());
+    let probs  = policy_net::forward(node.game.get_board());
+    let values = value_net::forward(node.game.get_board());
 
     probs  = Vec::from(probs);
     values = Vec::from(values);
 
-    node.expand(probs);
+    node.expand(&probs);
     
     // Backprop
     for node in search_path.iter().rev() {
@@ -135,8 +132,8 @@ fn run_mcts_sim(
 
 fn run_mcts(
     game: &ChessGame, 
-    policy_net: &nn::ModuleT, 
-    value_net: &nn::ModuleT, 
+    policy_net: &dyn nn::ModuleT, 
+    value_net: &dyn nn::ModuleT, 
     n_sims: usize
     ) {
     let root = Node::new(game, 0.00);

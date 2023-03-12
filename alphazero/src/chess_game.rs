@@ -4,7 +4,6 @@ use chess::{ ChessMove, GameResult, Board, MoveGen };
 
 use crate::move_map::*;
 
-#[allow(dead_code)]
 pub struct ChessGame<'a> {
     board: Board,
     current_player: i8,
@@ -17,7 +16,7 @@ pub trait ChessFuncs<'a> {
     fn new<'b>(move_hash: &'b HashMap<ChessMove, usize>) -> Self where 'b: 'a;
     fn make_move(&mut self, _move: usize) -> Option<i8>;
     fn _make_move(&mut self, _move: ChessMove) -> Option<i8>;
-    fn get_move_mask(&self) -> [usize; 1968];
+    fn get_move_mask(&self) -> [f32; 1968];
     fn make_move_random(&mut self) -> Option<i8>;
     fn get_current_player(&self) -> i8;
     fn get_board(&self) -> Board;
@@ -34,15 +33,15 @@ impl<'a> ChessFuncs<'a> for ChessGame<'a> {
         }
     }
 
-    fn get_move_mask(&self) -> [usize; 1968] {
-        let mut mask = [0; 1968];
+    fn get_move_mask(&self) -> [f32; 1968] {
+        let mut mask = [0.00; 1968];
         let iterable = MoveGen::new_legal(&self.board);
         for _move in iterable {
             let chess_move = match self.move_hash.get(&_move) {
                 Some(chess_move) => chess_move,
                 None => panic!("Move {:?} not found in move hash", _move),
             };
-            mask[*chess_move] = 1;
+            mask[*chess_move] = 1.00;
         }
         return mask;
     }
@@ -79,7 +78,7 @@ impl<'a> ChessFuncs<'a> for ChessGame<'a> {
         let mask = self.get_move_mask();
 
         let random_move = match iterable
-            .filter(|_move| mask[*self.move_hash.get(_move).unwrap()] == 1)
+            .filter(|_move| mask[*self.move_hash.get(_move).unwrap()] == 1.00)
             .choose(&mut rand::thread_rng()) {
                 Some(_move) => _move,
                 None => panic!("No legal moves"),
