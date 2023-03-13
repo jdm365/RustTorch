@@ -4,6 +4,7 @@ use chess::{ ChessMove, GameResult, Board, MoveGen };
 
 use crate::move_map::*;
 
+#[allow(dead_code)]
 pub struct ChessGame<'a> {
     board: Board,
     current_player: i8,

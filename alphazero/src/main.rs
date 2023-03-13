@@ -4,6 +4,7 @@ use rand::Rng;
 use std::thread;
 use std::sync::Arc;
 use std::collections::HashMap;
+use std::time::Instant;
 
 mod connect4;
 use crate::connect4::Connect4Funcs;
@@ -54,19 +55,28 @@ fn play_game_chess(move_hash: &HashMap<ChessMove, usize>) {
 
 
 fn main() {
-    const N_GAMES: usize = 100_000;
+    const N_GAMES: usize = 524_288;
+    const N_THREADS: usize = 512;
     let move_hash = Arc::new(get_move_hash());
 
+    let chunk_size = N_GAMES / N_THREADS;
 
-    for i in 0..N_GAMES {
-        // play_game_connect4(&mut game);
+
+    let start = std::time::Instant::now();
+
+    let handles: Vec<_> = (0..N_THREADS).map(|_| {
         let move_hash = move_hash.clone();
         thread::spawn(move || {
-            play_game_chess(&move_hash);
-        });
+            for _ in 0..chunk_size {
+                play_game_chess(&move_hash);
+            }
+        })
+    }).collect();
 
-        if (i+1) % 1000 == 0 {
-            println!("Game {} of {}", i+1, N_GAMES);
-        }
+    for h in handles {
+        h.join().unwrap();
     }
+
+    let end = std::time::Instant::now();
+    println!("Time elapsed: {} ms", (end - start).as_millis());
 }
