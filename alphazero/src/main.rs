@@ -16,11 +16,9 @@ use crate::chess_game::ChessGame;
 
 use chess::ChessMove;
 
-/*
 mod mcts;
 use crate::mcts::NodeFuncs;
 use crate::mcts::Node;
-*/
 
 pub mod move_map;
 use crate::move_map::*;
@@ -60,7 +58,6 @@ fn main() {
     let move_hash = Arc::new(get_move_hash());
 
     let chunk_size = N_GAMES / N_THREADS;
-
 
     let start = std::time::Instant::now();
 

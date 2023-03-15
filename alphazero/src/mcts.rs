@@ -90,12 +90,7 @@ impl<'a> NodeFuncs for Node<'a> {
 
 
 
-fn run_mcts_sim(
-    game: &ChessGame, 
-    node: Node, 
-    policy_net: &dyn nn::ModuleT, 
-    value_net:  &dyn nn::ModuleT
-    ) {
+fn run_mcts_sim(game: &ChessGame, node: Node) {
     /*
     MCTS: 4 steps
     Step 1: Selection       - Traverse the tree following maximized UCB until you arrive at a 
@@ -114,11 +109,8 @@ fn run_mcts_sim(
         node = node.select_move();
         search_path.push(&node);
     }
-    let probs  = policy_net::forward(node.game.get_board());
-    let values = value_net::forward(node.game.get_board());
-
-    probs  = Vec::from(probs);
-    values = Vec::from(values);
+    let probs  = get_game_probs(node.game.get_board());
+    let values = get_game_value(node.game.get_board());
 
     node.expand(&probs);
     
@@ -130,12 +122,7 @@ fn run_mcts_sim(
 }
 
 
-fn run_mcts(
-    game: &ChessGame, 
-    policy_net: &dyn nn::ModuleT, 
-    value_net: &dyn nn::ModuleT, 
-    n_sims: usize
-    ) {
+fn run_mcts(game: &ChessGame, n_sims: usize) {
     let root = Node::new(game, 0.00);
 
     for _ in 0..n_sims {
@@ -145,5 +132,85 @@ fn run_mcts(
             policy_net, 
             value_net
         )
+    }
+}
+
+
+struct ReplayBuffer {
+    board: Vec<f32>,
+    probs: Vec<f32>,
+    value: Vec<f32>,
+    reward: f32,
+}
+
+trait ReplayBufferFuncs {
+    fn new() -> Self;
+    fn add(&mut self, board: &Vec<f32>, probs: &Vec<f32>, value: f32, reward: f32) -> ();
+    fn sample(&self, batch_size: usize) -> Vec<ReplayBuffer>;
+}
+
+impl ReplayBufferFuncs for ReplayBuffer {
+    fn new() -> Self {
+        ReplayBuffer {
+            board: Vec::new(),
+            probs: Vec::new(),
+            value:  Vec::new(),
+            reward: 0.00,
+        }
+    }
+
+    fn add(&mut self, board: &Vec<f32>, probs: &Vec<f32>, value: f32, reward: f32) -> () {
+        self.board.push(board.clone());
+        self.probs.push(probs.clone());
+        self.value.push(value.clone());
+        self.reward = reward;
+    }
+
+    fn sample(&self, batch_size: usize) -> Vec<ReplayBuffer> {
+        let mut rng = rand::thread_rng();
+        let mut states = Vec::new();
+        let mut probs = Vec::new();
+        let mut values = Vec::new();
+        for _ in 0..batch_size {
+            let idx = rng.gen_range(0, self.board.len());
+            states.push(self.board[idx].clone());
+            probs.push(self.probs[idx].clone());
+            values.push(self.value[idx].clone());
+        }
+        return sample;
+    }
+}
+
+struct Networks {
+    policy_net: nn::Sequential,
+    value_net: nn::Sequential,
+    replay_buffer: Vec<ReplayBuffer>,
+}
+
+
+trait NetworkFuncs {
+    fn new() -> Self;
+    fn get_probs(&self, board: &Vec<f32>) -> Vec<f32>;
+    fn get_value(&self, board: &Vec<f32>) -> f32;
+}
+
+
+impl NetworkFuncs for Networks {
+    fn new() -> Self {
+        Networks {
+            policy_net: nn::resnet::resnet18(1, 1968),
+            value_net: nn::resnet::resnet18(1, 1),
+            replay_buffer: Vec::new(),
+        }
+    }
+
+    fn get_probs(&self, board: &Vec<f32>) -> Vec<f32> {
+        let probs = self.policy_net.forward(board);
+        return probs;
+    }
+
+    fn get_value(&self, board: &Vec<f32>) -> f32 {
+        let value = self.value_net.forward(board);
+        return value;
     }
 }
