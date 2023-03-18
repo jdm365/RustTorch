@@ -16,12 +16,16 @@ use crate::chess_game::ChessGame;
 
 use chess::ChessMove;
 
+use rayon::prelude::*;
+
 mod mcts;
 use crate::mcts::NodeFuncs;
 use crate::mcts::Node;
 
 pub mod move_map;
 use crate::move_map::*;
+
+pub mod networks;
 
 
 #[allow(dead_code)]
@@ -53,7 +57,7 @@ fn play_game_chess(move_hash: &HashMap<ChessMove, usize>) {
 
 
 fn main() {
-    const N_GAMES: usize = 524_288;
+    const N_GAMES: usize = 131_072;
     const N_THREADS: usize = 512;
     let move_hash = Arc::new(get_move_hash());
 
@@ -76,4 +80,21 @@ fn main() {
 
     let end = std::time::Instant::now();
     println!("Time elapsed: {} ms", (end - start).as_millis());
+
+    let start = std::time::Instant::now();
+
+    // Now play N_GAMES again on N_THREADS threads using rayon
+    rayon::scope(|s| {
+        for _ in 0..N_THREADS {
+            s.spawn(|_| {
+                for _ in 0..chunk_size {
+                    play_game_chess(&move_hash);
+                }
+            });
+        }
+    });
+
+
+    let end = std::time::Instant::now();
+    println!("Rayon Time elapsed: {} ms", (end - start).as_millis());
 }

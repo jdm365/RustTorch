@@ -13,18 +13,7 @@ pub struct ChessGame<'a> {
 }
 
 
-pub trait ChessFuncs<'a> {
-    fn new<'b>(move_hash: &'b HashMap<ChessMove, usize>) -> Self where 'b: 'a;
-    fn make_move(&mut self, _move: usize) -> Option<i8>;
-    fn _make_move(&mut self, _move: ChessMove) -> Option<i8>;
-    fn get_move_mask(&self) -> [f32; 1968];
-    fn make_move_random(&mut self) -> Option<i8>;
-    fn get_current_player(&self) -> i8;
-    fn get_board(&self) -> Board;
-}
-
-
-impl<'a> ChessFuncs<'a> for ChessGame<'a> {
+impl<'a> ChessGame<'a> {
     fn new<'b>(_move_hash: &'b HashMap<ChessMove, usize>) -> Self where 'b: 'a {
         ChessGame {
             board: Board::default(),

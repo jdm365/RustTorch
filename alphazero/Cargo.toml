@@ -10,6 +10,7 @@ tch = {version = "~0.10.1"}
 #anyhow = "~1.0.40"
 rand = "~0.8.3"
 chess = "3.2.0"
+rayon = "~1.7.0"
 
 [profile.release]
 lto = "fat" 
