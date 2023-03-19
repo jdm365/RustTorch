@@ -1,25 +1,29 @@
 use std::collections::HashMap;
+
+use std::rc::Rc;
+use std::cell::RefCell;
+
 use rand::seq::IteratorRandom;
 use chess::{ ChessMove, GameResult, Board, MoveGen };
 
 use crate::move_map::*;
 
 #[allow(dead_code)]
-pub struct ChessGame {
+pub struct ChessGame<'a> {
     board: Board,
     current_player: i8,
     result: Option<i8>,
-    move_hash: HashMap<ChessMove, usize>
+    move_hash: &'a HashMap<ChessMove, usize>
 }
 
 
-impl ChessGame {
-    pub fn new(_move_hash: HashMap<ChessMove, usize>) -> Self {
+impl<'a> ChessGame<'a> {
+    pub fn new(move_hash: &'a HashMap<ChessMove, usize>) -> Self {
         ChessGame {
             board: Board::default(),
             current_player: 1,
             result: None,
-            move_hash: _move_hash,
+            move_hash,
         }
     }
 

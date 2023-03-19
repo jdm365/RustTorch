@@ -14,7 +14,7 @@ use crate::networks::{ chess_transformer, policy_mlp, value_mlp, Config };
 use rand::Rng;
 
 pub struct Node {
-    game: ChessGame,
+    game: &ChessGame,
     visit_count: usize,
     value_sum: f32,
     child_nodes: HashMap<usize, Rc<RefCell<Node>>>,   // key, value = (move_idx, Node)
@@ -24,7 +24,7 @@ pub struct Node {
 
 
 impl Node {
-    fn new(game: ChessGame, prior: f32) -> Self {
+    fn new(game: &ChessGame, prior: f32) -> Self {
         Node {
             game,
             visit_count: 0,
@@ -34,7 +34,7 @@ impl Node {
         }
     }
 
-    fn expand(&mut self, probs: &Vec<f32>) -> () {
+    fn expand(&mut self, probs: &Vec<f32>) {
         // Mask illegal moves
         let move_mask = self.game.get_move_mask();
         let mut move_probs = move_mask.iter().zip(probs.iter()).map(|(&x, &y)| x * y).collect::<Vec<_>>();
@@ -118,7 +118,7 @@ fn run_mcts_sim(game: &ChessGame, networks: &Networks, node: Rc<RefCell<Node>>) 
 }
 
 
-fn run_mcts(game: ChessGame, networks: &Networks, n_sims: usize) {
+fn run_mcts(game: &ChessGame, networks: &Networks, n_sims: usize) {
     let root = Rc::new(RefCell::new(Node::new(game, 0.00)));
 
     for _ in 0..n_sims {
