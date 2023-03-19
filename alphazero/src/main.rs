@@ -11,7 +11,6 @@ use crate::connect4::Connect4Funcs;
 use crate::connect4::Connect4Game;
 
 pub mod chess_game;
-use crate::chess_game::ChessFuncs;
 use crate::chess_game::ChessGame;
 
 use chess::ChessMove;
@@ -19,7 +18,6 @@ use chess::ChessMove;
 use rayon::prelude::*;
 
 mod mcts;
-use crate::mcts::NodeFuncs;
 use crate::mcts::Node;
 
 pub mod move_map;

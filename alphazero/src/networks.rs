@@ -4,7 +4,7 @@ use tch::{Tensor, Kind, Device};
 
 // Bert base architecture (roughly)
 const MOVE_DIM: i64 = 1968;         // Number of possible chess moves as defined in move_map.rs
-const EMBEDDING_DIM: i64 = 624;     // 5 piece types per side, 64 squares (5 * 2) * 64 - (8 * 2 [no pawns on first rank]) = 624
+const EMBEDDING_DIM: i64 = 768;     // 6 piece types per side, 64 squares (6 * 2) * 64 = 768
 const INPUT_DIM: i64 = 64;
 const HIDDEN_DIM: i64 = 768; 
 const N_BLOCKS: i64 = 8;
@@ -14,8 +14,8 @@ const DROPOUT_RATE: f64 = 0.1;
 
 
 #[derive(Debug, Copy, Clone)]
-struct Config {
-    input_dim: i64,
+pub struct Config {
+    pub input_dim: i64,
     embedding_dim: i64,
     hidden_dim: i64,
     n_blocks: i64,
@@ -24,7 +24,8 @@ struct Config {
     dropout_rate: f64,
     policy_mlp_dim: i64,
     value_mlp_dim: i64,
-    move_dim: i64,
+    pub move_dim: i64,
+    pub replay_buffer_capacity: i64,
 }
 
 #[derive(Debug)]
@@ -95,34 +96,45 @@ fn encoder_block(p: &nn::Path, cfg: Config) -> impl nn::ModuleT {
     })
 }
 
-pub fn chess_transformer(p: &nn::Path, cfg: Config) -> impl nn::ModuleT {
-    let piece_embedding = nn::embedding(p / "piece_embedding", cfg.embedding_dim, cfg.hidden_dim, Default::default());
-    let layer_norm_final = nn::layer_norm(p / "layer_norm_final", vec![cfg.hidden_dim], Default::default()); 
+pub fn chess_transformer(path: &nn::Path, cfg: Config) -> nn::SequentialT {
+    let piece_embedding = nn::embedding(
+        path / "piece_embedding", 
+        cfg.embedding_dim, 
+        cfg.hidden_dim, 
+        Default::default(),
+        );
+    let layer_norm_final = nn::layer_norm(path / "layer_norm_final", vec![cfg.hidden_dim], Default::default()); 
     let mut encoder = nn::seq_t();
     for block_idx in 0..cfg.n_blocks {
-        encoder = encoder.add(encoder_block(&(p / block_idx), cfg));
+        encoder = encoder.add(encoder_block(&(path / block_idx), cfg));
     }
+    nn::seq_t().add(
     nn::func_t(move |xs, train| {
         let embeddings = xs.apply(&piece_embedding);
         let ys = embeddings.apply_t(&encoder, train);
         ys.apply(&layer_norm_final)
     })
+    )
 }
 
 
-pub fn policy_mlp(p: &nn::Path, cfg: Config) -> impl nn::ModuleT {
+pub fn policy_mlp(p: &nn::Path, cfg: Config) -> nn::SequentialT {
     // Wait to apply softmax, might want to use cross entropy loss which does a log softmax.
     let linear1 = linear(p / "linear1", cfg.policy_mlp_dim, cfg.policy_mlp_dim);
     let linear2 = linear(p / "linear2", cfg.policy_mlp_dim, cfg.move_dim);
+    nn::seq_t().add(
     nn::func_t(move |xs, train| {
         xs.apply(&linear1).gelu("none").apply(&linear2)
     })
+    )
 }
 
-pub fn value_mlp(p: &nn::Path, cfg: Config) -> impl nn::ModuleT {
+pub fn value_mlp(p: &nn::Path, cfg: Config) -> nn::SequentialT {
     let linear1 = linear(p / "linear1", cfg.value_mlp_dim, cfg.value_mlp_dim);
     let linear2 = linear(p / "linear2", cfg.value_mlp_dim, 1);
+    nn::seq_t().add(
     nn::func_t(move |xs, train| {
         xs.apply(&linear1).gelu("none").apply(&linear2).tanh()
     })
+    )
 }
