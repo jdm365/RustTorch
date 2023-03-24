@@ -1,11 +1,9 @@
 use Iterator;
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use std::collections::HashMap;
 use tch::nn;
 use tch::{ Tensor, Kind, Device};
+use typed_arena::Arena;
 
 use crate::chess_game::ChessGame;
 
@@ -13,18 +11,21 @@ use crate::networks::{ chess_transformer, policy_mlp, value_mlp, Config };
 
 use rand::Rng;
 
-pub struct Node {
-    game: &ChessGame,
+
+
+
+pub struct Node<'a> {
+    game: ChessGame,
     visit_count: usize,
     value_sum: f32,
-    child_nodes: HashMap<usize, Rc<RefCell<Node>>>,   // key, value = (move_idx, Node)
+    child_nodes: HashMap<usize, &'a Node<'a>>,   // key, value = (move_idx, node_idx `in arena`)
     prior: f32,
 }
 
 
 
-impl Node {
-    fn new(game: &ChessGame, prior: f32) -> Self {
+impl<'a> Node<'a> {
+    fn new(game: ChessGame, prior: f32) -> Self {
         Node {
             game,
             visit_count: 0,
@@ -34,7 +35,7 @@ impl Node {
         }
     }
 
-    fn expand(&mut self, probs: &Vec<f32>) {
+    fn expand(&mut self, nodes: &'a Arena<Node<'a>>, probs: &Vec<f32>) {
         // Mask illegal moves
         let move_mask = self.game.get_move_mask();
         let mut move_probs = move_mask.iter().zip(probs.iter()).map(|(&x, &y)| x * y).collect::<Vec<_>>();
@@ -48,10 +49,9 @@ impl Node {
             }
 
             self.game.make_move(move_idx);
-            self.child_nodes.insert(
-                move_idx, 
-                Rc::new(RefCell::new(Node::new(self.game, move_probs[move_idx])))
-                );
+            let child_node = nodes.alloc(Node::new(self.game.clone(), move_probs[move_idx]));
+            //nodes.alloc(child_node);
+            self.child_nodes.insert(move_idx, &child_node);
         }
     }
 
@@ -62,29 +62,35 @@ impl Node {
 
 
     #[inline]
-    fn calc_ucb(&self, child: Rc<RefCell<Node>>) -> f32 {
-        let actor_weight = child.borrow().prior;
-        let value_weight = -child.borrow().value_sum;
-        let visit_weight = (self.visit_count as f32).sqrt() / (child.borrow().visit_count + 1) as f32;
+    fn calc_ucb(&self, child_node: &'a Node) -> f32 {
+        let actor_weight = child_node.prior;
+        let value_weight = -child_node.value_sum;
+        let visit_weight = (self.visit_count as f32).sqrt() / (child_node.visit_count + 1) as f32;
 
         return value_weight + actor_weight * visit_weight;
     }
         
 
-    fn select_move(&self) -> Rc<RefCell<Node>> {
-       // Use mapping iterable to calculate UCB, find max, and get best action. 
-       // Return child Node of best action.
-       let move_idx = self.child_nodes.iter()
-                                      .map(|(k, v)| (k, self.calc_ucb(v.clone())))
-                                      .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
-                                      .unwrap().0;
-       return self.child_nodes[move_idx];
+    fn select_move(&self) -> &'a Node {
+        // Use mapping iterable to calculate UCB, find max, and get best action. 
+        // Return child Node of best action.
+        let mut best_move = 0;
+        let mut best_ucb = -100000.00;
+        for (move_idx, child_node) in self.child_nodes.iter() {
+            let ucb = self.calc_ucb(child_node);
+            if ucb > best_ucb {
+                best_ucb = ucb;
+                best_move = *move_idx;
+            }
+        }
+        self.child_nodes[&best_move]
+
     }
 }
 
 
 
-fn run_mcts_sim(game: &ChessGame, networks: &Networks, node: Rc<RefCell<Node>>) {
+fn run_mcts_sim<'a>(game: &ChessGame, networks: &Networks, root: &'a Node<'a>, nodes: &'a mut Arena<Node<'a>>) {
     /*
     MCTS: 4 steps
     Step 1: Selection       - Traverse the tree following maximized UCB until you arrive at a 
@@ -98,31 +104,37 @@ fn run_mcts_sim(game: &ChessGame, networks: &Networks, node: Rc<RefCell<Node>>) 
                               of winning.
     Step 4: Backpropogation - Update the search path with visit_count and evaulation sum.
     */
-    let mut search_path = vec![&node];
-    while node.borrow().expanded() {
-        node = node.borrow().select_move();
-        search_path.push(&node);
+    let mut search_path = vec![root];
+    let mut current_node = root;
+
+
+    while current_node.expanded() {
+        current_node = current_node.select_move();
+        search_path.push(current_node);
     }
-    let (probs, values) = match networks.forward(node.borrow().game.get_board(), false) {
+
+    let (probs, values) = match networks.forward(current_node.game.get_board(), false) {
         Some((p, v)) => (p, v),
         None => panic!("Networks failed to return values")
     };
 
-    node.borrow().expand(&probs);
+    current_node.expand(nodes, &probs);
     
     // Backprop
     for node in search_path.iter().rev() {
-        node.borrow_mut().value_sum += values * game.get_current_player() as f32;
-        node.borrow_mut().visit_count += 1;
+        node.value_sum += values * game.get_current_player() as f32;
+        node.visit_count += 1;
     }
 }
 
 
 fn run_mcts(game: &ChessGame, networks: &Networks, n_sims: usize) {
-    let root = Rc::new(RefCell::new(Node::new(game, 0.00)));
+    let nodes: Arena<Node> = Arena::new();
+
+    let root: &mut Node = nodes.alloc(Node::new(game.clone(), 0.00));
 
     for _ in 0..n_sims {
-        run_mcts_sim(&game, networks, root)
+        run_mcts_sim(&game, networks, root, &mut nodes)
     }
 }
 

@@ -123,7 +123,7 @@ pub fn policy_mlp(p: &nn::Path, cfg: Config) -> nn::SequentialT {
     let linear1 = linear(p / "linear1", cfg.policy_mlp_dim, cfg.policy_mlp_dim);
     let linear2 = linear(p / "linear2", cfg.policy_mlp_dim, cfg.move_dim);
     nn::seq_t().add(
-    nn::func_t(move |xs, train| {
+    nn::func_t(move |xs, _| {
         xs.apply(&linear1).gelu("none").apply(&linear2)
     })
     )
@@ -133,7 +133,7 @@ pub fn value_mlp(p: &nn::Path, cfg: Config) -> nn::SequentialT {
     let linear1 = linear(p / "linear1", cfg.value_mlp_dim, cfg.value_mlp_dim);
     let linear2 = linear(p / "linear2", cfg.value_mlp_dim, 1);
     nn::seq_t().add(
-    nn::func_t(move |xs, train| {
+    nn::func_t(move |xs, _| {
         xs.apply(&linear1).gelu("none").apply(&linear2).tanh()
     })
     )

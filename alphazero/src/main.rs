@@ -40,8 +40,8 @@ fn play_game_connect4() {
     }
 }
 
-fn play_game_chess(move_hash: &Arc<RwLock<HashMap<ChessMove, usize>>>) {
-    let mut game = ChessGame::new(&move_hash.read().unwrap());
+fn play_game_chess(move_hash: Arc<HashMap<ChessMove, usize>>) {
+    let mut game = ChessGame::new(move_hash);
     for _ in 0..200 {
         // End game after 100 moves if not ended
         match game.make_move_random() {
@@ -57,7 +57,7 @@ fn play_game_chess(move_hash: &Arc<RwLock<HashMap<ChessMove, usize>>>) {
 fn main() {
     const N_GAMES: usize = 131_072;
     const N_THREADS: usize = 512;
-    let move_hash = Arc::new(RwLock::new(get_move_hash()));
+    let move_hash = Arc::new(get_move_hash());
 
     let chunk_size = N_GAMES / N_THREADS;
 
@@ -66,10 +66,9 @@ fn main() {
     // Now play N_GAMES again on N_THREADS threads using rayon
     rayon::scope(|s| {
         for _ in 0..N_THREADS {
-            //let move_hash = move_hash.clone();
             s.spawn(|_| {
                 for _ in 0..chunk_size {
-                    play_game_chess(&move_hash);
+                    play_game_chess(move_hash.clone());
                 }
             });
         }

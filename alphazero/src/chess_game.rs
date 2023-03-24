@@ -1,7 +1,5 @@
 use std::collections::HashMap;
-
-use std::rc::Rc;
-use std::cell::RefCell;
+use std::sync::Arc;
 
 use rand::seq::IteratorRandom;
 use chess::{ ChessMove, GameResult, Board, MoveGen };
@@ -9,16 +7,17 @@ use chess::{ ChessMove, GameResult, Board, MoveGen };
 use crate::move_map::*;
 
 #[allow(dead_code)]
-pub struct ChessGame<'a> {
+#[derive(Clone)]
+pub struct ChessGame {
     board: Board,
     current_player: i8,
     result: Option<i8>,
-    move_hash: &'a HashMap<ChessMove, usize>
+    move_hash: Arc<HashMap<ChessMove, usize>>
 }
 
 
-impl<'a> ChessGame<'a> {
-    pub fn new(move_hash: &'a HashMap<ChessMove, usize>) -> Self {
+impl ChessGame {
+    pub fn new(move_hash: Arc<HashMap<ChessMove, usize>>) -> Self {
         ChessGame {
             board: Board::default(),
             current_player: 1,
