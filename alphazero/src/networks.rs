@@ -3,20 +3,25 @@ use tch::{Tensor, Kind, Device};
 
 
 // Bert base architecture (roughly)
-const MOVE_DIM: i64 = 1968;         // Number of possible chess moves as defined in move_map.rs
-const EMBEDDING_DIM: i64 = 768;     // 6 piece types per side, 64 squares (6 * 2) * 64 = 768
-const INPUT_DIM: i64 = 64;
-const HIDDEN_DIM: i64 = 768; 
-const N_BLOCKS: i64 = 8;
-const N_HEADS: i64 = 12;
-const MLP_EXPANSION_FACTOR: i64 = 4;
-const DROPOUT_RATE: f64 = 0.1;
+pub const BERT_BASE_CONFIG: Config = Config {
+    input_dim: 64,          // 64 squares, 1 piece per square
+    embedding_dim: 832,     // 6 piece types per side plus one for no piece, 64 squares ((6 * 2) + 1) * 64 = 832
+    hidden_dim: 768,
+    n_blocks: 8,
+    n_heads: 12,
+    mlp_expansion_factor: 4,
+    dropout_rate: 0.1,
+    policy_mlp_dim: 256,
+    value_mlp_dim: 256,
+    move_dim: 1968,         // Number of possible chess moves as defined in move_map.rs
+    replay_buffer_capacity: 100000,
+};
 
 
 #[derive(Debug, Copy, Clone)]
 pub struct Config {
     pub input_dim: i64,
-    embedding_dim: i64,
+    pub embedding_dim: i64,
     hidden_dim: i64,
     n_blocks: i64,
     n_heads: i64,
@@ -113,14 +118,17 @@ pub fn chess_transformer(path: &nn::Path, cfg: Config) -> nn::SequentialT {
         let embeddings = xs.apply(&piece_embedding);
         let ys = embeddings.apply_t(&encoder, train);
         ys.apply(&layer_norm_final)
-    })
-    )
+    }))
+    .add(
+        nn::func_t(move |xs, _| {
+            xs.mean_dim(Some([1i64].as_slice()), false, Kind::Float)
+        }))
 }
 
 
 pub fn policy_mlp(p: &nn::Path, cfg: Config) -> nn::SequentialT {
     // Wait to apply softmax, might want to use cross entropy loss which does a log softmax.
-    let linear1 = linear(p / "linear1", cfg.policy_mlp_dim, cfg.policy_mlp_dim);
+    let linear1 = linear(p / "linear1", cfg.hidden_dim, cfg.policy_mlp_dim);
     let linear2 = linear(p / "linear2", cfg.policy_mlp_dim, cfg.move_dim);
     nn::seq_t().add(
     nn::func_t(move |xs, _| {
@@ -130,7 +138,7 @@ pub fn policy_mlp(p: &nn::Path, cfg: Config) -> nn::SequentialT {
 }
 
 pub fn value_mlp(p: &nn::Path, cfg: Config) -> nn::SequentialT {
-    let linear1 = linear(p / "linear1", cfg.value_mlp_dim, cfg.value_mlp_dim);
+    let linear1 = linear(p / "linear1", cfg.hidden_dim, cfg.value_mlp_dim);
     let linear2 = linear(p / "linear2", cfg.value_mlp_dim, 1);
     nn::seq_t().add(
     nn::func_t(move |xs, _| {

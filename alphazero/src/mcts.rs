@@ -3,7 +3,6 @@ use Iterator;
 use std::collections::HashMap;
 use tch::nn;
 use tch::{ Tensor, Kind, Device};
-use typed_arena::Arena;
 
 use crate::chess_game::ChessGame;
 
@@ -14,7 +13,7 @@ use rand::Rng;
 
 
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Node {
     game: ChessGame,
     visit_count: usize,
@@ -35,32 +34,6 @@ impl Node {
             prior
         }
     }
-
-    fn expand(&mut self, probs: &Vec<f32>, node_arena: &mut NodeArena) {
-        // Mask illegal moves
-        let move_mask = self.game.get_move_mask();
-        let mut move_probs = move_mask.iter().zip(probs.iter()).map(|(&x, &y)| x * y).collect::<Vec<_>>();
-        let sum: f32 = move_probs.iter().sum();
-        move_probs = move_probs.iter().map(|&x| x / sum).collect::<Vec<_>>();
-        
-        // Create new nodes for all moves.
-        for move_idx in 0..1968 {
-            if move_probs[move_idx] == 0.00 {
-                continue;
-            }
-
-            self.game.make_move(move_idx);
-            let child_node = Node::new(self.game.clone(), move_probs[move_idx]);
-            let arena_idx = node_arena.push(child_node);
-            self.child_nodes.insert(move_idx, arena_idx);
-        }
-    }
-
-
-    fn expanded(&self) -> bool {
-        return self.visit_count != 0;
-    }
-
 
     #[inline]
     fn calc_ucb(&self, child_node: &Node) -> f32 {
@@ -88,10 +61,27 @@ impl Node {
         }
         best_move
     }
+
+    fn select_move_final(&self, node_arena: &NodeArena) -> usize {
+        // Use mapping iterable to calculate UCB, find max, and get best action. 
+        // Return child Node of best action.
+        let mut best_move = 0;
+        let mut best_ucb = -100000.00;
+
+        for (move_idx, arena_idx) in self.child_nodes.iter() {
+            let ucb = self.calc_ucb(node_arena.get(*arena_idx));
+
+            if ucb > best_ucb {
+                best_ucb = ucb;
+                best_move = *move_idx;
+            }
+        }
+        best_move
+    }
 }
 
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct NodeArena {
     arena: Vec<Node>,
 }
@@ -134,20 +124,39 @@ fn run_mcts_sim(networks: &Networks, node_arena: &mut NodeArena) {
     Step 4: Backpropogation - Update the search path with visit_count and evaulation sum.
     */
     let mut search_path = vec![0];
-    let mut current_idx = 0;
+    let mut arena_idx = 0;
+    
 
-    while node_arena.get(current_idx).expanded() {
-        current_idx = node_arena.get(current_idx).select_move(&node_arena);
-        search_path.push(current_idx);
+    while node_arena.get(arena_idx).child_nodes.len() != 0 {
+        arena_idx = node_arena.get(arena_idx).select_move(&node_arena);
+        search_path.push(arena_idx);
     }
 
-    let (probs, values) = match networks.forward(node_arena.get(current_idx).game.get_board(), false) {
+    let (probs, values) = match networks.forward(node_arena.get(arena_idx).game.get_board(), false) {
         Some((p, v)) => (p, v),
         None => panic!("Networks failed to return values")
     };
 
-    // Expand
-    node_arena.get_mut(current_idx).clone().expand(&probs, node_arena);
+    // node_arena.get_mut(arena_idx).expand(&probs, node_arena);
+
+    // Expand. Need to call here to satisfy borrow checker.
+    let move_mask = node_arena.get_mut(arena_idx).game.get_move_mask();
+    let mut move_probs = move_mask.iter().zip(probs.iter()).map(|(&x, &y)| x * y).collect::<Vec<_>>();
+    let sum: f32 = move_probs.iter().sum();
+    move_probs = move_probs.iter().map(|&x| x / sum).collect::<Vec<_>>();
+
+    // Create new nodes for all moves.
+    for move_idx in 0..1968 {
+        if move_probs[move_idx] == 0.00 {
+            continue;
+        }
+
+        let mut new_game = node_arena.get_mut(arena_idx).game.clone();
+        new_game.make_move(move_idx);
+        let child_node = Node::new(new_game, move_probs[move_idx]);
+        let arena_idx_child = node_arena.push(child_node);
+        node_arena.get_mut(arena_idx).child_nodes.insert(move_idx, arena_idx_child);
+    }
     
     // Backprop
     for node_idx in search_path.iter().rev() {
@@ -158,7 +167,7 @@ fn run_mcts_sim(networks: &Networks, node_arena: &mut NodeArena) {
 }
 
 
-fn run_mcts(game: &ChessGame, networks: &Networks, n_sims: usize) {
+pub fn run_mcts(game: &ChessGame, networks: &Networks, n_sims: usize) -> usize {
     let root = Node::new(game.clone(), 0.00);
     let mut node_arena = NodeArena::new();
     node_arena.push(root);
@@ -166,9 +175,13 @@ fn run_mcts(game: &ChessGame, networks: &Networks, n_sims: usize) {
     for _ in 0..n_sims {
         run_mcts_sim(networks, &mut node_arena);
     }
+
+    // Return best move based on mcts
+    node_arena.get(0).select_move_final(&node_arena)
 }
 
 
+#[allow(dead_code)]
 struct ReplayBuffer {
     states: Tensor,
     probs: Tensor,
@@ -181,6 +194,7 @@ struct ReplayBuffer {
 
 
 
+#[allow(dead_code)]
 impl ReplayBuffer {
     fn new(capacity: i64, input_dim: i64, n_actions: i64) -> Self {
         ReplayBuffer {
@@ -216,7 +230,8 @@ impl ReplayBuffer {
 }
 
 
-struct Networks {
+#[allow(dead_code)]
+pub struct Networks {
     state_processing_network: nn::SequentialT,
     policy_head: nn::SequentialT,
     value_head:  nn::SequentialT,
@@ -224,8 +239,9 @@ struct Networks {
 }
 
 
+
 impl Networks {
-    fn new(cfg: Config) -> Self {
+    pub fn new(cfg: Config) -> Self {
         let var_store = nn::VarStore::new(Device::cuda_if_available());
         let state_processing_network = chess_transformer(
             &(var_store.root() / "state_processing_network"), 
@@ -247,11 +263,13 @@ impl Networks {
         }
     }
 
-    fn forward(&self, board: [u8; 768], train: bool) -> Option<(Vec<f32>, f32)> {
+    fn forward(&self, board: [i32; 64], train: bool) -> Option<(Vec<f32>, f32)> {
         // Get probabilities of all moves from policy net.
         // FuncT::forward_t() -> (&Tensor, train: bool) -> Tensor
-        let tensor_board = Tensor::of_slice(&board);
+        let tensor_board = (Tensor::of_slice(&board).to_kind(Kind::Int).to_device(tch::Device::cuda_if_available())).unsqueeze(0);
+
         let processed_state = tensor_board.apply_t(&self.state_processing_network, train);
+
         let _probs = processed_state.apply_t(&self.policy_head, train).softmax(-1, Kind::Float);
         let _value = processed_state.apply_t(&self.value_head, train).tanh();
 

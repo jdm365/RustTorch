@@ -18,12 +18,13 @@ use chess::ChessMove;
 use rayon::prelude::*;
 
 mod mcts;
-use crate::mcts::Node;
+use crate::mcts::*;
 
 pub mod move_map;
 use crate::move_map::*;
 
 pub mod networks;
+use crate::networks::*;
 
 
 #[allow(dead_code)]
@@ -42,9 +43,13 @@ fn play_game_connect4() {
 
 fn play_game_chess(move_hash: Arc<HashMap<ChessMove, usize>>) {
     let mut game = ChessGame::new(move_hash);
+
+    let networks = Networks::new(BERT_BASE_CONFIG);
     for _ in 0..200 {
-        // End game after 100 moves if not ended
-        match game.make_move_random() {
+        let best_move = run_mcts(&mut game, &networks, 800);
+
+        println!("Best Move: {:?}", best_move);
+        match game.make_move(best_move) {
             Some(_) => {
                 break;
             },
@@ -53,17 +58,18 @@ fn play_game_chess(move_hash: Arc<HashMap<ChessMove, usize>>) {
     }
 }
 
+#[allow(dead_code)]
 
 fn main() {
     const N_GAMES: usize = 131_072;
     const N_THREADS: usize = 512;
     let move_hash = Arc::new(get_move_hash());
 
-    let chunk_size = N_GAMES / N_THREADS;
 
+    // Multithreaded
+    /*
     let start = std::time::Instant::now();
-
-    // Now play N_GAMES again on N_THREADS threads using rayon
+    let chunk_size = N_GAMES / N_THREADS;
     rayon::scope(|s| {
         for _ in 0..N_THREADS {
             s.spawn(|_| {
@@ -73,8 +79,16 @@ fn main() {
             });
         }
     });
-
-
     let end = std::time::Instant::now();
     println!("Rayon Time elapsed: {} ms", (end - start).as_millis());
+    */
+
+
+    let start = std::time::Instant::now();
+    // Single Threaded
+    for _ in 0..N_GAMES {
+        play_game_chess(move_hash.clone());
+    }
+    let end = std::time::Instant::now();
+    println!("Single Thread Time elapsed: {} ms", (end - start).as_millis());
 }

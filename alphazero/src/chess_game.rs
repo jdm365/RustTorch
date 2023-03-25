@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rand::seq::IteratorRandom;
-use chess::{ ChessMove, GameResult, Board, MoveGen };
+use chess::{ ChessMove, GameResult, Board, MoveGen, Rank, File, Square };
 
 use crate::move_map::*;
 
 #[allow(dead_code)]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ChessGame {
     board: Board,
     current_player: i8,
@@ -40,8 +40,8 @@ impl ChessGame {
     }
 
     pub fn make_move(&mut self, move_idx: usize) -> Option<i8> {
-        let _move = match self.move_hash.keys().nth(move_idx) {
-            Some(_move) => _move,
+        let _move = match self.move_hash.iter().find(|(_move, &idx)| idx == move_idx) {
+            Some(_move) => _move.0,
             None => panic!("Index out of range"),
         };
         return self._make_move(*_move);
@@ -84,7 +84,7 @@ impl ChessGame {
         return self.current_player;
     }
 
-    pub fn get_board(&self) -> [u8; 768] {
+    pub fn get_board_old(&self) -> [u8; 768] {
         /*
         ------------------------------------------------------------------------------------------------------------
         Board mapping representation:
@@ -109,7 +109,7 @@ impl ChessGame {
         square_idx: rank * 8 + file where file is 0-7 for a-h
         ------------------------------------------------------------------------------------------------------------
         */
-        let mut representation: [u8; 768] = [0; 768];
+        let mut mask: [u8; 768] = [0; 768];
 
         let white_bitboard = self.board.color_combined(chess::Color::White);
         let black_bitboard = self.board.color_combined(chess::Color::Black);
@@ -121,21 +121,70 @@ impl ChessGame {
         let queen_bitboard  = self.board.pieces(chess::Piece::Queen);
         let king_bitboard   = self.board.pieces(chess::Piece::King);
 
-        representation[0..64].copy_from_slice(&(white_bitboard & pawn_bitboard).to_size(0).to_be_bytes().to_vec());
-        representation[64..128].copy_from_slice(&(white_bitboard & knight_bitboard).to_size(0).to_be_bytes().to_vec());
-        representation[128..192].copy_from_slice(&(white_bitboard & bishop_bitboard).to_size(0).to_be_bytes().to_vec());
-        representation[192..256].copy_from_slice(&(white_bitboard & rook_bitboard).to_size(0).to_be_bytes().to_vec());
-        representation[256..320].copy_from_slice(&(white_bitboard & queen_bitboard).to_size(0).to_be_bytes().to_vec());
-        representation[320..384].copy_from_slice(&(white_bitboard & king_bitboard).to_size(0).to_be_bytes().to_vec());
+        // Endianness not important as long as it is consistent
+        mask[0..64].copy_from_slice(&u64_tobit_array((white_bitboard & pawn_bitboard).to_size(0) as u64));
+        mask[64..128].copy_from_slice(&u64_tobit_array((white_bitboard & knight_bitboard).to_size(0) as u64));
+        mask[128..192].copy_from_slice(&u64_tobit_array((white_bitboard & bishop_bitboard).to_size(0) as u64));
+        mask[192..256].copy_from_slice(&u64_tobit_array((white_bitboard & rook_bitboard).to_size(0) as u64));
+        mask[256..320].copy_from_slice(&u64_tobit_array((white_bitboard & queen_bitboard).to_size(0) as u64));
+        mask[320..384].copy_from_slice(&u64_tobit_array((white_bitboard & king_bitboard).to_size(0) as u64));
 
-        representation[384..448].copy_from_slice(&(black_bitboard & pawn_bitboard).to_size(0).to_be_bytes().to_vec());
-        representation[448..512].copy_from_slice(&(black_bitboard & knight_bitboard).to_size(0).to_be_bytes().to_vec());
-        representation[512..576].copy_from_slice(&(black_bitboard & bishop_bitboard).to_size(0).to_be_bytes().to_vec());
-        representation[576..640].copy_from_slice(&(black_bitboard & rook_bitboard).to_size(0).to_be_bytes().to_vec());
-        representation[640..704].copy_from_slice(&(black_bitboard & queen_bitboard).to_size(0).to_be_bytes().to_vec());
-        representation[704..768].copy_from_slice(&(black_bitboard & king_bitboard).to_size(0).to_be_bytes().to_vec());
+        mask[384..448].copy_from_slice(&u64_tobit_array((black_bitboard & pawn_bitboard).to_size(0) as u64));
+        mask[448..512].copy_from_slice(&u64_tobit_array((black_bitboard & knight_bitboard).to_size(0) as u64));
+        mask[512..576].copy_from_slice(&u64_tobit_array((black_bitboard & bishop_bitboard).to_size(0) as u64));
+        mask[576..640].copy_from_slice(&u64_tobit_array((black_bitboard & rook_bitboard).to_size(0) as u64));
+        mask[640..704].copy_from_slice(&u64_tobit_array((black_bitboard & queen_bitboard).to_size(0) as u64));
+        mask[704..768].copy_from_slice(&u64_tobit_array((black_bitboard & king_bitboard).to_size(0) as u64));
+
+        return mask;
+    }
+
+    pub fn get_board(&self) -> [i32; 64] {
+        // Smaller function which gets nn board representation.
+        // Piece + Position embedding index -> [0, 64 * 13) = [0, 832) - 32 for pawns on respective first rank.
+        // [0, 800) for all 64 squares.
+        // NOTE: Going to start with [0, 832) to limit complexity.
+        // get embedding idx by square_idx * 13 + piece_idx + 6 * (is_black)
+        let mut representation: [i32; 64] = [0; 64];
+        for idx in 0..64 {
+            let rank = Rank::from_index((idx / 8) as usize);
+            let file = File::from_index(idx % 8);
+            let square = Square::make_square(rank, file);
+            representation[idx] = match self.board.piece_on(square) {
+                Some(piece) => {
+                    let offset = match self.board.color_on(square) {
+                        Some(color) => match color {
+                            chess::Color::White => 0,
+                            chess::Color::Black => 6,
+                        },
+                        None => panic!("No color on square"),
+                    };
+                    let piece_idx = match piece {
+                        chess::Piece::Pawn => 0 + offset,
+                        chess::Piece::Knight => 1 + offset,
+                        chess::Piece::Bishop => 2 + offset,
+                        chess::Piece::Rook => 3 + offset,
+                        chess::Piece::Queen => 4 + offset,
+                        chess::Piece::King => 5 + offset,
+                    };
+                    (13 * idx) as i32 + piece_idx
+                },
+                None => 0,
+            };
+        }
 
         return representation;
+        }
+}
+
+
+
+#[inline]
+fn u64_tobit_array(value: u64) -> [u8; 64] {
+    let mut array = [0; 64];
+    for i in 0..64 {
+        array[i] = ((value >> i) & 1) as u8;
     }
+    return array;
 }
 
