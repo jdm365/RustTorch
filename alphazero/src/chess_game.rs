@@ -53,9 +53,11 @@ impl ChessGame {
 
         match self.board.status() {
             chess::BoardStatus::Checkmate => {
+                self.result = Some(self.current_player * -1);
                 return Some(self.current_player);
             },
             chess::BoardStatus::Stalemate => {
+                self.result = Some(0);
                 return Some(0);
             },
             chess::BoardStatus::Ongoing => {
@@ -63,6 +65,10 @@ impl ChessGame {
                 return None;
             }
         }
+    }
+
+    pub fn get_status(&self) -> Option<i8> {
+        return self.result;
     }
 
     pub fn make_move_random(&mut self) -> Option<i8> {

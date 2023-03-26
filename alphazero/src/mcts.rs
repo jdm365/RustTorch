@@ -62,22 +62,33 @@ impl Node {
         best_move
     }
 
-    fn select_move_final(&self, node_arena: &NodeArena) -> usize {
+    fn select_move_final(&self, node_arena: &NodeArena) -> (Vec<f32>, usize) {
         // Use mapping iterable to calculate UCB, find max, and get best action. 
         // Return child Node of best action.
-        let mut best_move = 0;
-        let mut best_ucb = -100000.00;
+        let temperature = 1.00;
 
+        let mut probs: [f32; 1968] = [0.00; 1968];
         for (move_idx, arena_idx) in self.child_nodes.iter() {
-            let ucb = self.calc_ucb(node_arena.get(*arena_idx));
+            probs[*move_idx] = (node_arena.get(*arena_idx).visit_count as f32).powf(1.00 / temperature);
+        }
+        let sum: f32 = probs.iter().sum();
+        let probs = probs.iter().map(|&x| x / sum).collect::<Vec<_>>();
 
-            if ucb > best_ucb {
-                best_ucb = ucb;
-                best_move = *move_idx;
+        // Choose action based on probs.
+        // TODO: Check this.
+        let mut rng = rand::thread_rng();
+        let mut rand_num = rng.gen_range(0.00..1.00);
+        let mut move_idx = 0;
+        for (idx, &prob) in probs.iter().enumerate() {
+            rand_num -= prob;
+            if rand_num <= 0.00 {
+                move_idx = idx;
+                break;
             }
         }
-        best_move
+        (probs, move_idx)
     }
+
 }
 
 
@@ -132,42 +143,55 @@ fn run_mcts_sim(networks: &Networks, node_arena: &mut NodeArena) {
         search_path.push(arena_idx);
     }
 
-    let (probs, values) = match networks.forward(node_arena.get(arena_idx).game.get_board(), false) {
-        Some((p, v)) => (p, v),
-        None => panic!("Networks failed to return values")
-    };
+    let value = node_arena.get(arena_idx).game.get_status();
 
-    // node_arena.get_mut(arena_idx).expand(&probs, node_arena);
+    match value {
+        Some(value) => {
+            // Backprop
+            for node_idx in search_path.iter().rev() {
+                let node = node_arena.get_mut(*node_idx);
+                node.value_sum += value as f32 * node.game.get_current_player() as f32;
+                node.visit_count += 1;
+            }
+        },
+        None => {
+            let (probs, values) = match networks.forward(node_arena.get(arena_idx).game.get_board(), false) {
+                Some((p, v)) => (p, v),
+                None => panic!("Networks failed to return values")
+            };
 
-    // Expand. Need to call here to satisfy borrow checker.
-    let move_mask = node_arena.get_mut(arena_idx).game.get_move_mask();
-    let mut move_probs = move_mask.iter().zip(probs.iter()).map(|(&x, &y)| x * y).collect::<Vec<_>>();
-    let sum: f32 = move_probs.iter().sum();
-    move_probs = move_probs.iter().map(|&x| x / sum).collect::<Vec<_>>();
+            // Expand. Need to call here to satisfy borrow checker.
+            let move_mask = node_arena.get_mut(arena_idx).game.get_move_mask();
+            let mut move_probs = move_mask.iter().zip(probs.iter()).map(|(&x, &y)| x * y).collect::<Vec<_>>();
+            let sum: f32 = move_probs.iter().sum();
+            move_probs = move_probs.iter().map(|&x| x / sum).collect::<Vec<_>>();
 
-    // Create new nodes for all moves.
-    for move_idx in 0..1968 {
-        if move_probs[move_idx] == 0.00 {
-            continue;
+            // Create new nodes for all moves.
+            for move_idx in 0..1968 {
+                if move_probs[move_idx] == 0.00 {
+                    continue;
+                }
+
+                let mut new_game = node_arena.get_mut(arena_idx).game.clone();
+                new_game.make_move(move_idx);
+                let child_node = Node::new(new_game, move_probs[move_idx]);
+                let arena_idx_child = node_arena.push(child_node);
+                node_arena.get_mut(arena_idx).child_nodes.insert(move_idx, arena_idx_child);
+            }
+
+            // Backprop
+            for node_idx in search_path.iter().rev() {
+                let node = node_arena.get_mut(*node_idx);
+                node.value_sum += values * node.game.get_current_player() as f32;
+                node.visit_count += 1;
+            }
         }
-
-        let mut new_game = node_arena.get_mut(arena_idx).game.clone();
-        new_game.make_move(move_idx);
-        let child_node = Node::new(new_game, move_probs[move_idx]);
-        let arena_idx_child = node_arena.push(child_node);
-        node_arena.get_mut(arena_idx).child_nodes.insert(move_idx, arena_idx_child);
     }
     
-    // Backprop
-    for node_idx in search_path.iter().rev() {
-        let node = node_arena.get_mut(*node_idx);
-        node.value_sum += values * node.game.get_current_player() as f32;
-        node.visit_count += 1;
-    }
 }
 
 
-pub fn run_mcts(game: &ChessGame, networks: &Networks, n_sims: usize) -> usize {
+pub fn run_mcts(game: &ChessGame, networks: &mut Networks, n_sims: usize) -> usize {
     let root = Node::new(game.clone(), 0.00);
     let mut node_arena = NodeArena::new();
     node_arena.push(root);
@@ -177,7 +201,12 @@ pub fn run_mcts(game: &ChessGame, networks: &Networks, n_sims: usize) -> usize {
     }
 
     // Return best move based on mcts
-    node_arena.get(0).select_move_final(&node_arena)
+    let (probs, best_move) = node_arena.get(0).select_move_final(&node_arena);
+    networks.replay_buffer.push(
+        networks.get_tensor_board(game.get_board(), false), 
+        Tensor::of_slice(&probs).to_kind(Kind::Float).to_device(Device::Cpu),
+        );
+    best_move
 }
 
 
@@ -185,10 +214,12 @@ pub fn run_mcts(game: &ChessGame, networks: &Networks, n_sims: usize) -> usize {
 struct ReplayBuffer {
     states: Tensor,
     probs: Tensor,
-    values: Tensor,
     rewards: Tensor,
+    episode_states: Tensor,
+    episode_probs: Tensor,
     capacity: i64,
-    cntr: i64
+    episode_cntr: i64,
+    buffer_ptr: i64,
 }
 
 
@@ -198,33 +229,67 @@ struct ReplayBuffer {
 impl ReplayBuffer {
     fn new(capacity: i64, input_dim: i64, n_actions: i64) -> Self {
         ReplayBuffer {
-            states: Tensor::zeros(&[capacity, input_dim], (Kind::Float, Device::cuda_if_available())),
-            probs: Tensor::zeros(&[capacity, n_actions], (Kind::Float, Device::cuda_if_available())),
-            values: Tensor::zeros(&[capacity, 1], (Kind::Float, Device::cuda_if_available())),
-            rewards: Tensor::zeros(&[capacity, 1], (Kind::Float, Device::cuda_if_available())),
+            states: Tensor::zeros(&[capacity, input_dim], (Kind::Int, Device::Cpu)),
+            probs: Tensor::zeros(&[capacity, n_actions], (Kind::Float, Device::Cpu)),
+            rewards: Tensor::zeros(&[capacity, 1], (Kind::Float, Device::Cpu)),
+            episode_states: Tensor::zeros(&[1024, input_dim], (Kind::Float, Device::Cpu)),
+            episode_probs: Tensor::zeros(&[1024, n_actions], (Kind::Float, Device::Cpu)),
             capacity,
-            cntr: 0
+            episode_cntr: 0,
+            buffer_ptr: 0,
         }
     }
 
-    fn push(&mut self, state: Tensor, probs: Tensor, value: Tensor, reward: Tensor) {
-        self.cntr = self.cntr % self.capacity;
-        self.states.get(self.cntr).copy_(&state);
-        self.probs.get(self.cntr).copy_(&probs);
-        self.values.get(self.cntr).copy_(&value);
-        self.rewards.get(self.cntr).copy_(&reward);
-        self.cntr += 1;
+    pub fn push(&mut self, state: Tensor, probs: Tensor) {
+        self.episode_states.slice(0, self.episode_cntr, self.episode_cntr + 1, 1).copy_(&state);
+        self.episode_probs.slice(0, self.episode_cntr, self.episode_cntr + 1, 1).copy_(&probs);
+        self.episode_cntr += 1;
     }
 
-    fn sample(&self, batch_size: i64) -> Option<(Tensor, Tensor, Tensor, Tensor)> {
+    pub fn store_episode(&mut self, reward: i32) {
+        // Reward is -1, 0, 1
+        // To create reward tensor for episode, backtrack through episode 
+        // and add reward for each state and prob pair multiplying by -1
+        // each time.
+        let prev_buffer_ptr = match self.capacity < self.episode_cntr + self.buffer_ptr {
+            true => 0,
+            false => self.buffer_ptr,
+        };
+
+        self.buffer_ptr += self.episode_cntr;
+        self.episode_cntr = 0;
+
+        if reward == 0 {
+            self.states.slice(0, prev_buffer_ptr, self.buffer_ptr, 1).copy_(&self.episode_states);
+            self.probs.slice(0, prev_buffer_ptr, self.buffer_ptr, 1).copy_(&self.episode_probs);
+            self.rewards.slice(0, prev_buffer_ptr, self.buffer_ptr, 1).copy_(&Tensor::zeros(&[self.episode_cntr, 1], (Kind::Float, Device::Cpu)));
+
+        }
+        else {
+            let mut rewards = vec![reward as f32; self.episode_cntr as usize];
+            for idx in (0..self.episode_cntr - 1).rev() {
+                rewards[idx as usize] *= -1.0;
+            }
+            let reward_tensor = Tensor::of_slice(&rewards).to_kind(Kind::Float).to_device(Device::Cpu);
+
+            self.states.slice(0, prev_buffer_ptr, self.buffer_ptr, 1).copy_(&self.episode_states);
+            self.probs.slice(0, prev_buffer_ptr, self.buffer_ptr, 1).copy_(&self.episode_probs);
+            self.rewards.slice(0, prev_buffer_ptr, self.buffer_ptr, 1).copy_(&reward_tensor);
+
+        }
+        self.episode_states = self.episode_states.zero_();
+        self.episode_probs  = self.episode_probs.zero_();
+
+    }
+
+    pub fn sample(&self, batch_size: i64) -> Option<(Tensor, Tensor, Tensor)> {
         let idxs = Tensor::randint(self.capacity - 1 , &[batch_size], (Kind::Int64, Device::cuda_if_available()));
 
         let states  = self.states.index_select(0, &idxs);
         let probs   = self.probs.index_select(0, &idxs);
-        let values  = self.values.index_select(0, &idxs);
         let rewards = self.rewards.index_select(0, &idxs);
 
-        return Some((states, probs, values, rewards));
+        return Some((states, probs, rewards));
 
     }
 }
@@ -266,7 +331,7 @@ impl Networks {
     fn forward(&self, board: [i32; 64], train: bool) -> Option<(Vec<f32>, f32)> {
         // Get probabilities of all moves from policy net.
         // FuncT::forward_t() -> (&Tensor, train: bool) -> Tensor
-        let tensor_board = (Tensor::of_slice(&board).to_kind(Kind::Int).to_device(tch::Device::cuda_if_available())).unsqueeze(0);
+        let tensor_board = self.get_tensor_board(board, true);
 
         let processed_state = tensor_board.apply_t(&self.state_processing_network, train);
 
@@ -277,5 +342,16 @@ impl Networks {
         let value = f32::from(_value.to_kind(Kind::Float).to_device(tch::Device::Cpu));
 
         return Some((probs_vec, value));
+    }
+
+    pub fn get_tensor_board(&self, board: [i32; 64], to_gpu: bool) -> Tensor {
+        match to_gpu {
+            true => Tensor::of_slice(&board).to_kind(Kind::Int).to_device(tch::Device::cuda_if_available()).unsqueeze(0),
+            false => Tensor::of_slice(&board).to_kind(Kind::Int).to_device(tch::Device::Cpu).unsqueeze(0)
+        }
+    }
+
+    pub fn store_episode(&mut self, reward: i32) {
+        self.replay_buffer.store_episode(reward);
     }
 }
