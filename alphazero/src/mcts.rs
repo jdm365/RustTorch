@@ -198,7 +198,12 @@ fn run_mcts_sim(networks: &Networks, node_arena: &mut NodeArena) {
 }
 
 
-pub fn run_mcts(game: &ChessGame, networks: &mut Networks, n_sims: usize) -> usize {
+pub fn run_mcts(
+    game: &ChessGame, 
+    networks: &mut Networks, 
+    replay_buffer: &mut ReplayBuffer, 
+    n_sims: usize,
+    ) -> usize {
     let root = Node::new(game.clone(), 0.00);
     let mut node_arena = NodeArena::new();
     node_arena.push(root);
@@ -209,7 +214,7 @@ pub fn run_mcts(game: &ChessGame, networks: &mut Networks, n_sims: usize) -> usi
 
     // Return best move based on mcts
     let (probs, best_move) = node_arena.get(0).select_move_final(&node_arena);
-    networks.replay_buffer.push(
+    replay_buffer.push(
         networks.get_tensor_board(game.get_board(), false), 
         Tensor::of_slice(&probs).to_kind(Kind::Float).to_device(Device::Cpu),
         );
@@ -218,7 +223,7 @@ pub fn run_mcts(game: &ChessGame, networks: &mut Networks, n_sims: usize) -> usi
 
 
 #[allow(dead_code)]
-struct ReplayBuffer {
+pub struct ReplayBuffer {
     states: Tensor,
     probs: Tensor,
     rewards: Tensor,
@@ -235,7 +240,7 @@ struct ReplayBuffer {
 
 #[allow(dead_code)]
 impl ReplayBuffer {
-    fn new(capacity: i64, input_dim: i64, n_actions: i64) -> Self {
+    pub fn new(capacity: i64, input_dim: i64, n_actions: i64) -> Self {
         ReplayBuffer {
             states: Tensor::zeros(&[capacity, input_dim], (Kind::Int, Device::Cpu)),
             probs: Tensor::zeros(&[capacity, n_actions], (Kind::Float, Device::Cpu)),
@@ -332,7 +337,6 @@ pub struct Networks {
     state_processing_network: nn::SequentialT,
     policy_head: nn::SequentialT,
     value_head:  nn::SequentialT,
-    replay_buffer: ReplayBuffer,
     optimizer: nn::Optimizer,
 }
 
@@ -358,7 +362,6 @@ impl Networks {
             state_processing_network,
             policy_head,
             value_head,
-            replay_buffer: ReplayBuffer::new(cfg.replay_buffer_capacity, cfg.input_dim, cfg.move_dim),
             optimizer,
         }
     }
@@ -394,22 +397,14 @@ impl Networks {
         }
     }
 
-    pub fn store_episode(&mut self, reward: i32) {
-        match self.replay_buffer.store_episode(reward) {
-            true => {
-                self.train(128, 256);
-            },
-            false => {},
-        }
-    }
 
-    pub fn train(&mut self, n_iters: i64, batch_size: i64) {
+    pub fn train(&mut self, replay_buffer: &ReplayBuffer, n_iters: i64, batch_size: i64) {
         let two = Tensor::of_slice(&[2.0]).to_kind(Kind::Float).to_device(Device::cuda_if_available());
 
         init_progress_bar(n_iters as usize);
         set_progress_bar_action("Training", Color::Green, Style::Bold);
         for _ in 0..n_iters {
-            let (target_states, target_probs, target_rewards) = self.replay_buffer.sample(batch_size);
+            let (target_states, target_probs, target_rewards) = replay_buffer.sample(batch_size);
 
             let (probs, value) = self.tensor_forward(target_states, true).expect("Forward pass failed");
 
