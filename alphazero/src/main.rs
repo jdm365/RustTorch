@@ -10,6 +10,9 @@ mod connect4;
 use crate::connect4::Connect4Funcs;
 use crate::connect4::Connect4Game;
 
+pub mod configs;
+use crate::configs::*;
+
 pub mod chess_game;
 use crate::chess_game::ChessGame;
 
@@ -41,12 +44,12 @@ fn play_game_connect4() {
     }
 }
 
-fn play_game_chess(move_hash: Arc<HashMap<ChessMove, usize>>, networks: &mut Networks) {
+fn play_game_chess(move_hash: Arc<HashMap<ChessMove, usize>>, networks: &mut Networks, n_mcts_sims: usize) {
     let mut game = ChessGame::new(move_hash.clone());
 
     let mut reward = 0;
     for idx in 0..200 {
-        let best_move = run_mcts(&mut game, networks, 800);
+        let best_move = run_mcts(&mut game, networks, n_mcts_sims);
 
         println!("Move {}: {:?}", (idx / 2) + 1 as usize, move_hash.iter().find(|(_, &v)| v == best_move).unwrap().0.to_string());
         match game.make_move(best_move) {
@@ -61,12 +64,14 @@ fn play_game_chess(move_hash: Arc<HashMap<ChessMove, usize>>, networks: &mut Net
 }
 
 #[allow(dead_code)]
-
 fn main() {
     const N_GAMES: usize = 131_072;
     const N_THREADS: usize = 512;
+    const N_MCTS_SIMS: usize = 400;
+
     let move_hash = Arc::new(get_move_hash());
-    let mut networks = Networks::new(BERT_BASE_CONFIG);
+    // let mut networks = Networks::new(BERT_BASE_CONFIG);
+    let mut networks = Networks::new(SMALL_CONFIG);
 
 
     // Multithreaded
@@ -90,7 +95,7 @@ fn main() {
     let start = std::time::Instant::now();
     // Single Threaded
     for _ in 0..N_GAMES {
-        play_game_chess(move_hash.clone(), &mut networks);
+        play_game_chess(move_hash.clone(), &mut networks, N_MCTS_SIMS);
     }
     let end = std::time::Instant::now();
     println!("Single Thread Time elapsed: {} ms", (end - start).as_millis());

@@ -11,8 +11,9 @@ tch = {version = "~0.10.1"}
 rand = "~0.8.3"
 chess = "3.2.0"
 rayon = "~1.7.0"
+progress_bar = "~1.0.3"
 
 [profile.release]
 lto = "fat" 
 codegen-units = 1
-
+opt-level = 3

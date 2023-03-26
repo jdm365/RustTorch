@@ -1,5 +1,7 @@
 use Iterator;
 
+use progress_bar::*;
+
 use std::collections::HashMap;
 use tch::nn;
 use tch::{ Tensor, Kind, Device, vision::dataset::Dataset, nn::OptimizerConfig };
@@ -159,6 +161,11 @@ fn run_mcts_sim(networks: &Networks, node_arena: &mut NodeArena) {
                 Some((p, v)) => (p, v),
                 None => panic!("Networks failed to return values")
             };
+            /*
+            // DEBUG PERF
+            let probs = vec![1.00; 1968];
+            let values = 0.50;
+            */
 
             // Expand. Need to call here to satisfy borrow checker.
             let move_mask = node_arena.get_mut(arena_idx).game.get_move_mask();
@@ -391,8 +398,7 @@ impl Networks {
     pub fn store_episode(&mut self, reward: i32) {
         match self.replay_buffer.store_episode(reward) {
             true => {
-                println!("======================Training======================");
-                self.train(1024, 32);
+                self.train(128, 256);
             },
             false => {},
         }
@@ -400,6 +406,9 @@ impl Networks {
 
     pub fn train(&mut self, n_iters: i64, batch_size: i64) {
         let two = Tensor::of_slice(&[2.0]).to_kind(Kind::Float).to_device(Device::cuda_if_available());
+
+        init_progress_bar(n_iters as usize);
+        set_progress_bar_action("Training", Color::Green, Style::Bold);
         for _ in 0..n_iters {
             let (target_states, target_probs, target_rewards) = self.replay_buffer.sample(batch_size);
 
@@ -411,6 +420,7 @@ impl Networks {
 
             self.optimizer.backward_step(&total_loss);
             self.optimizer.zero_grad();
+            inc_progress_bar();
         }
     }
 
