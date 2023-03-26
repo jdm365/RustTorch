@@ -48,7 +48,7 @@ fn play_game_chess(move_hash: Arc<HashMap<ChessMove, usize>>, networks: &mut Net
     let mut game = ChessGame::new(move_hash.clone());
 
     let mut reward = 0;
-    for idx in 0..200 {
+    for idx in 0..10 {
         let best_move = run_mcts(&mut game, networks, n_mcts_sims);
 
         println!("Move {}: {:?}", (idx / 2) + 1 as usize, move_hash.iter().find(|(_, &v)| v == best_move).unwrap().0.to_string());
@@ -65,9 +65,9 @@ fn play_game_chess(move_hash: Arc<HashMap<ChessMove, usize>>, networks: &mut Net
 
 #[allow(dead_code)]
 fn main() {
-    const N_GAMES: usize = 131_072;
+    const N_GAMES: usize = 1;//31_072;
     const N_THREADS: usize = 512;
-    const N_MCTS_SIMS: usize = 400;
+    const N_MCTS_SIMS: usize = 40;
 
     let move_hash = Arc::new(get_move_hash());
     // let mut networks = Networks::new(BERT_BASE_CONFIG);

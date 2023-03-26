@@ -233,7 +233,6 @@ struct ReplayBuffer {
 
 
 
-
 #[allow(dead_code)]
 impl ReplayBuffer {
     fn new(capacity: i64, input_dim: i64, n_actions: i64) -> Self {
