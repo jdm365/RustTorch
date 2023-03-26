@@ -41,13 +41,12 @@ fn play_game_connect4() {
     }
 }
 
-fn play_game_chess(move_hash: Arc<HashMap<ChessMove, usize>>) {
+fn play_game_chess(move_hash: Arc<HashMap<ChessMove, usize>>, networks: &mut Networks) {
     let mut game = ChessGame::new(move_hash.clone());
 
-    let mut networks = Networks::new(BERT_BASE_CONFIG);
     let mut reward = 0;
     for idx in 0..200 {
-        let best_move = run_mcts(&mut game, &mut networks, 800);
+        let best_move = run_mcts(&mut game, networks, 800);
 
         println!("Move {}: {:?}", (idx / 2) + 1 as usize, move_hash.iter().find(|(_, &v)| v == best_move).unwrap().0.to_string());
         match game.make_move(best_move) {
@@ -67,6 +66,7 @@ fn main() {
     const N_GAMES: usize = 131_072;
     const N_THREADS: usize = 512;
     let move_hash = Arc::new(get_move_hash());
+    let mut networks = Networks::new(BERT_BASE_CONFIG);
 
 
     // Multithreaded
@@ -90,7 +90,7 @@ fn main() {
     let start = std::time::Instant::now();
     // Single Threaded
     for _ in 0..N_GAMES {
-        play_game_chess(move_hash.clone());
+        play_game_chess(move_hash.clone(), &mut networks);
     }
     let end = std::time::Instant::now();
     println!("Single Thread Time elapsed: {} ms", (end - start).as_millis());

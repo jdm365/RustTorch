@@ -14,7 +14,7 @@ pub const BERT_BASE_CONFIG: Config = Config {
     policy_mlp_dim: 256,
     value_mlp_dim: 256,
     move_dim: 1968,         // Number of possible chess moves as defined in move_map.rs
-    replay_buffer_capacity: 100000,
+    replay_buffer_capacity: 100_000,
 };
 
 

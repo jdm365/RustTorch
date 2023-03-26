@@ -2,7 +2,7 @@ use Iterator;
 
 use std::collections::HashMap;
 use tch::nn;
-use tch::{ Tensor, Kind, Device};
+use tch::{ Tensor, Kind, Device, vision::dataset::Dataset, nn::OptimizerConfig };
 
 use crate::chess_game::ChessGame;
 
@@ -220,6 +220,8 @@ struct ReplayBuffer {
     capacity: i64,
     episode_cntr: i64,
     buffer_ptr: i64,
+    n_episodes: i64,
+    full: bool,
 }
 
 
@@ -237,6 +239,8 @@ impl ReplayBuffer {
             capacity,
             episode_cntr: 0,
             buffer_ptr: 0,
+            n_episodes: 0,
+            full: false,
         }
     }
 
@@ -246,23 +250,32 @@ impl ReplayBuffer {
         self.episode_cntr += 1;
     }
 
-    pub fn store_episode(&mut self, reward: i32) {
+    pub fn store_episode(&mut self, reward: i32) -> bool {
         // Reward is -1, 0, 1
         // To create reward tensor for episode, backtrack through episode 
         // and add reward for each state and prob pair multiplying by -1
         // each time.
+        self.n_episodes += 1;
+
         let prev_buffer_ptr = match self.capacity < self.episode_cntr + self.buffer_ptr {
-            true => 0,
+            true => {
+                self.full = true;
+                0
+            },
             false => self.buffer_ptr,
         };
 
         self.buffer_ptr += self.episode_cntr;
-        self.episode_cntr = 0;
 
         if reward == 0 {
-            self.states.slice(0, prev_buffer_ptr, self.buffer_ptr, 1).copy_(&self.episode_states);
-            self.probs.slice(0, prev_buffer_ptr, self.buffer_ptr, 1).copy_(&self.episode_probs);
-            self.rewards.slice(0, prev_buffer_ptr, self.buffer_ptr, 1).copy_(&Tensor::zeros(&[self.episode_cntr, 1], (Kind::Float, Device::Cpu)));
+            self.states.slice(0, prev_buffer_ptr, self.buffer_ptr, 1)
+                       .copy_(&self.episode_states.slice(0, 0, self.episode_cntr, 1));
+
+            self.probs.slice(0, prev_buffer_ptr, self.buffer_ptr, 1)
+                      .copy_(&self.episode_probs.slice(0, 0, self.episode_cntr, 1));
+
+            self.rewards.slice(0, prev_buffer_ptr, self.buffer_ptr, 1)
+                        .copy_(&Tensor::zeros(&[self.episode_cntr, 1], (Kind::Float, Device::Cpu)));
 
         }
         else {
@@ -270,27 +283,40 @@ impl ReplayBuffer {
             for idx in (0..self.episode_cntr - 1).rev() {
                 rewards[idx as usize] *= -1.0;
             }
-            let reward_tensor = Tensor::of_slice(&rewards).to_kind(Kind::Float).to_device(Device::Cpu);
+            let reward_tensor = Tensor::of_slice(&rewards).to_kind(Kind::Float).to_device(Device::Cpu).unsqueeze(1);
 
-            self.states.slice(0, prev_buffer_ptr, self.buffer_ptr, 1).copy_(&self.episode_states);
-            self.probs.slice(0, prev_buffer_ptr, self.buffer_ptr, 1).copy_(&self.episode_probs);
-            self.rewards.slice(0, prev_buffer_ptr, self.buffer_ptr, 1).copy_(&reward_tensor);
+            self.states.slice(0, prev_buffer_ptr, self.buffer_ptr, 1)
+                       .copy_(&self.episode_states.slice(0, 0, self.episode_cntr, 1));
 
+            self.probs.slice(0, prev_buffer_ptr, self.buffer_ptr, 1)
+                      .copy_(&self.episode_probs.slice(0, 0, self.episode_cntr, 1));
+
+            self.rewards.slice(0, prev_buffer_ptr, self.buffer_ptr, 1)
+                        .copy_(&reward_tensor);
         }
+
+
+        self.episode_cntr = 0;
+
         self.episode_states = self.episode_states.zero_();
         self.episode_probs  = self.episode_probs.zero_();
 
+        // Easy way to avoid training on basically no data in beggining.
+        self.n_episodes % 5 == 4
     }
 
-    pub fn sample(&self, batch_size: i64) -> Option<(Tensor, Tensor, Tensor)> {
-        let idxs = Tensor::randint(self.capacity - 1 , &[batch_size], (Kind::Int64, Device::cuda_if_available()));
+    pub fn sample(&self, batch_size: i64) -> (Tensor, Tensor, Tensor) {
+        let max_idx = match self.full {
+            true => self.capacity,
+            false => self.buffer_ptr,
+        };
 
-        let states  = self.states.index_select(0, &idxs);
-        let probs   = self.probs.index_select(0, &idxs);
-        let rewards = self.rewards.index_select(0, &idxs);
+        let idxs    = Tensor::randint(max_idx, &[batch_size], (Kind::Int, Device::Cpu));
+        let states  = self.states.index_select(0, &idxs).to_device(Device::cuda_if_available());
+        let probs   = self.probs.index_select(0, &idxs).to_device(Device::cuda_if_available());
+        let rewards = self.rewards.index_select(0, &idxs).to_device(Device::cuda_if_available());
 
-        return Some((states, probs, rewards));
-
+        (states, probs, rewards)
     }
 }
 
@@ -301,6 +327,7 @@ pub struct Networks {
     policy_head: nn::SequentialT,
     value_head:  nn::SequentialT,
     replay_buffer: ReplayBuffer,
+    optimizer: nn::Optimizer,
 }
 
 
@@ -320,11 +347,13 @@ impl Networks {
             &(var_store.root() / "value_head"), 
             cfg 
             );
+        let optimizer = nn::Adam::default().build(&var_store, 1e-3).expect("Optimizer failed to build");
         Networks {
             state_processing_network,
             policy_head,
             value_head,
             replay_buffer: ReplayBuffer::new(cfg.replay_buffer_capacity, cfg.input_dim, cfg.move_dim),
+            optimizer,
         }
     }
 
@@ -332,16 +361,24 @@ impl Networks {
         // Get probabilities of all moves from policy net.
         // FuncT::forward_t() -> (&Tensor, train: bool) -> Tensor
         let tensor_board = self.get_tensor_board(board, true);
+        
+        let (probs_tensor, value_tensor) = self.tensor_forward(tensor_board, train).expect("Forward pass failed");
 
+        let probs = Vec::from(probs_tensor.to_kind(Kind::Float).to_device(tch::Device::Cpu));
+        let value = f32::from(value_tensor.to_kind(Kind::Float).to_device(tch::Device::Cpu));
+
+        return Some((probs, value));
+    }
+
+    fn tensor_forward(&self, tensor_board: Tensor, train: bool) -> Option<(Tensor, Tensor)> {
+        // Get probabilities of all moves from policy net.
+        // FuncT::forward_t() -> (&Tensor, train: bool) -> Tensor
         let processed_state = tensor_board.apply_t(&self.state_processing_network, train);
 
-        let _probs = processed_state.apply_t(&self.policy_head, train).softmax(-1, Kind::Float);
-        let _value = processed_state.apply_t(&self.value_head, train).tanh();
+        let probs = processed_state.apply_t(&self.policy_head, train).softmax(-1, Kind::Float);
+        let value = processed_state.apply_t(&self.value_head, train).tanh();
 
-        let probs_vec = Vec::from(_probs.to_kind(Kind::Float).to_device(tch::Device::Cpu));
-        let value = f32::from(_value.to_kind(Kind::Float).to_device(tch::Device::Cpu));
-
-        return Some((probs_vec, value));
+        return Some((probs, value));
     }
 
     pub fn get_tensor_board(&self, board: [i32; 64], to_gpu: bool) -> Tensor {
@@ -352,6 +389,29 @@ impl Networks {
     }
 
     pub fn store_episode(&mut self, reward: i32) {
-        self.replay_buffer.store_episode(reward);
+        match self.replay_buffer.store_episode(reward) {
+            true => {
+                println!("======================Training======================");
+                self.train(1024, 32);
+            },
+            false => {},
+        }
     }
+
+    pub fn train(&mut self, n_iters: i64, batch_size: i64) {
+        let two = Tensor::of_slice(&[2.0]).to_kind(Kind::Float).to_device(Device::cuda_if_available());
+        for _ in 0..n_iters {
+            let (target_states, target_probs, target_rewards) = self.replay_buffer.sample(batch_size);
+
+            let (probs, value) = self.tensor_forward(target_states, true).expect("Forward pass failed");
+
+            let actor_loss = -(target_probs * probs.log()).sum_dim_intlist(Some([-1i64].as_slice()), false, Kind::Float);
+            let critic_loss = (target_rewards - value).pow(&two).sum(Kind::Float) / batch_size;
+            let total_loss = actor_loss.mean(Kind::Float) + critic_loss;
+
+            self.optimizer.backward_step(&total_loss);
+            self.optimizer.zero_grad();
+        }
+    }
+
 }
