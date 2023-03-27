@@ -60,7 +60,7 @@ fn play_game_chess(
 fn main() {
     const N_GAMES: usize = 1024;
     const N_THREADS: usize = 512;
-    const N_MCTS_SIMS: usize = 400;
+    const N_MCTS_SIMS: usize = 800;
 
     let move_hash = Arc::new(get_move_hash());
     // let mut networks = Networks::new(BERT_BASE_CONFIG);
