@@ -4,7 +4,7 @@ use progress_bar::*;
 
 use std::collections::HashMap;
 use tch::nn;
-use tch::{ Tensor, Kind, Device, vision::dataset::Dataset, nn::OptimizerConfig };
+use tch::{ Tensor, Kind, Device, vision::dataset::Dataset, nn::OptimizerConfig, TchError };
 
 use crate::chess_game::ChessGame;
 
@@ -200,7 +200,7 @@ fn run_mcts_sim(networks: &Networks, node_arena: &mut NodeArena) {
 
 pub fn run_mcts(
     game: &ChessGame, 
-    networks: &mut Networks, 
+    networks: &Networks, 
     replay_buffer: &mut ReplayBuffer, 
     n_sims: usize,
     ) -> usize {
@@ -338,6 +338,7 @@ pub struct Networks {
     policy_head: nn::SequentialT,
     value_head:  nn::SequentialT,
     optimizer: nn::Optimizer,
+    var_store: nn::VarStore,
 }
 
 
@@ -363,6 +364,7 @@ impl Networks {
             policy_head,
             value_head,
             optimizer,
+            var_store,
         }
     }
 
@@ -416,6 +418,29 @@ impl Networks {
             self.optimizer.zero_grad();
             inc_progress_bar();
         }
+        // Save network and optimizer config to file.
+        match self.save("saved_models/networks_test.pth") {
+            Ok(_) => {},
+            Err(e) => println!("Error saving network config: {}", e),
+        }
+        match self.load("saved_models/networks_test.pth") {
+            Ok(_) => {},
+            Err(e) => println!("Error loading network config: {}", e),
+        }
+    }
+
+
+    fn save(&self, filename: &str) -> Result<(), TchError> {
+        println!("...Saving Network Config to {}...", filename);
+        self.var_store.save(filename)?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn load(&mut self, filename: &str) -> Result<(), TchError> {
+        println!("...Loading Network Config from {}...", filename);
+        self.var_store.load(filename)?;
+        Ok(())
     }
 
 }
