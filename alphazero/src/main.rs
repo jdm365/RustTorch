@@ -6,10 +6,6 @@ use std::sync::{ Arc, RwLock };
 use std::collections::HashMap;
 use std::time::Instant;
 
-mod connect4;
-use crate::connect4::Connect4Funcs;
-use crate::connect4::Connect4Game;
-
 pub mod configs;
 use crate::configs::*;
 
@@ -29,20 +25,6 @@ use crate::move_map::*;
 pub mod networks;
 use crate::networks::*;
 
-
-#[allow(dead_code)]
-fn play_game_connect4() {
-    let mut game = Connect4Game::new();
-    loop {
-        let action = rand::thread_rng().gen_range(0..7);
-        match game.make_move(action) {
-            Some(_) => {
-                break;
-            },
-            None => {},
-        }
-    }
-}
 
 fn play_game_chess(
     move_hash: Arc<HashMap<ChessMove, usize>>, 
