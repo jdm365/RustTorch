@@ -1,5 +1,8 @@
+use progress_bar::*;
+
+use crate::replay_buffer::*;
 use tch::nn;
-use tch::{Tensor, Kind, Device};
+use tch::{ Tensor, Kind, Device, nn::OptimizerConfig, TchError };//, autocast };
 
 
 
@@ -130,4 +133,128 @@ pub fn value_mlp(p: &nn::Path, cfg: Config) -> nn::SequentialT {
         xs.apply(&linear1).gelu("none").apply(&linear2).tanh()
     })
     )
+}
+
+
+pub struct Networks {
+    state_processing_network: nn::SequentialT,
+    policy_head: nn::SequentialT,
+    value_head:  nn::SequentialT,
+    optimizer: nn::Optimizer,
+    var_store: nn::VarStore,
+}
+
+
+
+impl Networks {
+    pub fn new(cfg: Config) -> Self {
+        let var_store = nn::VarStore::new(Device::cuda_if_available());
+        let state_processing_network = chess_transformer(
+            &(var_store.root() / "state_processing_network"), 
+            cfg 
+            );
+        let policy_head = policy_mlp(
+            &(var_store.root() / "policy_head"), 
+            cfg 
+            );
+        let value_head = value_mlp(
+            &(var_store.root() / "value_head"), 
+            cfg 
+            );
+
+        let optimizer = nn::Adam::default().build(&var_store, 1e-3).expect("Optimizer failed to build");
+        Networks {
+            state_processing_network,
+            policy_head,
+            value_head,
+            optimizer,
+            var_store,
+        }
+    }
+
+    pub fn forward(&self, board: [i32; 64], train: bool) -> Option<(Vec<f32>, f32)> {
+        // Get probabilities of all moves from policy net.
+        // FuncT::forward_t() -> (&Tensor, train: bool) -> Tensor
+        let tensor_board = self.get_tensor_board(board, true);
+        
+        let (probs_tensor, value_tensor) = self.tensor_forward(tensor_board, train).expect("Forward pass failed");
+
+        let probs = Vec::from(probs_tensor.to_kind(Kind::Float).to_device(tch::Device::Cpu));
+        let value = f32::from(value_tensor.to_kind(Kind::Float).to_device(tch::Device::Cpu));
+
+        return Some((probs, value));
+    }
+
+    fn tensor_forward(&self, tensor_board: Tensor, train: bool) -> Option<(Tensor, Tensor)> {
+        // Get probabilities of all moves from policy net.
+        // FuncT::forward_t() -> (&Tensor, train: bool) -> Tensor
+        /*
+        autocast(train, || {
+            let processed_state = tensor_board.apply_t(&self.state_processing_network, train);
+
+            let probs = processed_state.apply_t(&self.policy_head, train).softmax(-1, Kind::Float);
+            let value = processed_state.apply_t(&self.value_head, train).tanh();
+
+            return Some((probs, value));
+        })
+        */
+        let processed_state = tensor_board.apply_t(&self.state_processing_network, train);
+
+        let probs = processed_state.apply_t(&self.policy_head, train).softmax(-1, Kind::Float);
+        let value = processed_state.apply_t(&self.value_head, train).tanh();
+
+        return Some((probs, value));
+    }
+
+    pub fn get_tensor_board(&self, board: [i32; 64], to_gpu: bool) -> Tensor {
+        match to_gpu {
+            true => Tensor::of_slice(&board).to_kind(Kind::Int).to_device(tch::Device::cuda_if_available()).unsqueeze(0),
+            false => Tensor::of_slice(&board).to_kind(Kind::Int).to_device(tch::Device::Cpu).unsqueeze(0)
+        }
+    }
+
+
+    pub fn train(&mut self, replay_buffer: &ReplayBuffer, n_iters: i64, batch_size: i64) {
+        let two = Tensor::of_slice(&[2.0]).to_kind(Kind::Float).to_device(Device::cuda_if_available());
+
+        init_progress_bar(n_iters as usize);
+        set_progress_bar_action("Training", Color::Green, Style::Bold);
+        for _ in 0..n_iters {
+            let (target_states, target_probs, target_rewards) = replay_buffer.sample(batch_size);
+
+            let (probs, value) = self.tensor_forward(target_states, true).expect("Forward pass failed");
+
+            let actor_loss = -(target_probs * probs.log()).sum_dim_intlist(Some([-1i64].as_slice()), false, Kind::Float);
+            let critic_loss = (target_rewards - value).pow(&two).sum(Kind::Float) / batch_size;
+            let total_loss = actor_loss.mean(Kind::Float) + critic_loss;
+
+            self.optimizer.backward_step(&total_loss);
+            self.optimizer.zero_grad();
+            inc_progress_bar();
+        }
+        // Save network and optimizer config to file.
+        match self.save("saved_models/networks_test.pth") {
+            Ok(_) => {},
+            Err(e) => println!("Error saving network config: {}", e),
+        }
+        match self.load("saved_models/networks_test.pth") {
+            Ok(_) => {},
+            Err(e) => println!("Error loading network config: {}", e),
+        }
+    }
+
+
+    fn save(&self, filename: &str) -> Result<(), TchError> {
+        println!("...Saving Network Config to {}...", filename);
+        self.var_store.save(filename)?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn load(&mut self, filename: &str) -> Result<(), TchError> {
+        println!("...Loading Network Config from {}...", filename);
+        self.var_store.load(filename)?;
+        Ok(())
+    }
+
 }

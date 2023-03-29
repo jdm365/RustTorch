@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rand::seq::IteratorRandom;
-use chess::{ ChessMove, GameResult, Board, MoveGen, Rank, File, Square };
-
-use crate::move_map::*;
+use chess::{ ChessMove, Board, MoveGen, Rank, File, Square };
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
