@@ -8,6 +8,9 @@ use crate::networks::Networks;
 use crate::chess_game::ChessGame;
 
 
+use std::sync::{Arc, Mutex};
+use rayon::prelude::*;
+
 
 
 #[derive(Debug, Clone)]
@@ -174,7 +177,7 @@ fn run_mcts_sim(networks: &Networks, node_arena: &mut NodeArena) {
                     continue;
                 }
 
-                let mut new_game = node_arena.get_mut(arena_idx).game.clone();
+                let mut new_game = node_arena.get(arena_idx).game.clone();
                 new_game.make_move(move_idx);
                 let child_node = Node::new(new_game, move_probs[move_idx]);
                 let arena_idx_child = node_arena.push(child_node);
@@ -190,6 +193,28 @@ fn run_mcts_sim(networks: &Networks, node_arena: &mut NodeArena) {
         }
     }
     
+}
+
+
+fn run_mcts_nsims_multithreaded(
+    networks: &Networks, 
+    node_arenas: &mut Vec<NodeArena>, 
+    num_threads: usize,
+    num_sims: usize,
+    ) {
+    /*
+    MCTS: 4 steps
+    Step 1: Selection       - Traverse the tree following maximized UCB until you arrive at a 
+                              state which has not been evaluated by policy and value nets. 
+                              Select that node.
+    Step 2: Expansion       - Enumerate all possible moves in selected state. *Mask invlid moves.
+    Step 3: Simulation      - Misnomer for AlphaZero approach. Makes more sense in classical
+                              MCTS. Here it just means query the networks and get scores
+                              for all moves in the position (Masking illegal moves) and 
+                              value of the position in the form of a predicted probability
+                              of winning.
+    Step 4: Backpropogation - Update the search path with visit_count and evaulation sum.
+    */
 }
 
 
@@ -214,4 +239,46 @@ pub fn run_mcts(
         Tensor::of_slice(&probs).to_kind(Kind::Float).to_device(Device::Cpu),
         );
     best_move
+}
+
+
+
+pub fn run_mcts_multithreaded(
+    games: &Vec<ChessGame>, 
+    networks: &Networks, 
+    replay_buffer: &mut ReplayBuffer, 
+    num_sims: usize,
+    ) -> Vec<usize> {
+    let num_threads = games.len();
+
+    let root_nodes = {
+        let mut root_nodes = Vec::new();
+        for game in games.iter() {
+            root_nodes.push(Node::new(game.clone(), 0.00));
+        }
+        root_nodes
+    };
+    let mut node_arenas = {
+        let mut node_arenas = Vec::new();
+        for idx in 0..num_threads {
+            node_arenas.push(NodeArena::new());
+            node_arenas[idx].push(root_nodes[idx].clone());
+        }
+        node_arenas
+    };
+
+    // TODO: Parallelize this
+    run_mcts_nsims_multithreaded(networks, &mut node_arenas, num_threads, num_sims);
+
+    // Return best move based on mcts
+    let mut best_moves = Vec::new();
+    for (arena, game) in node_arenas.iter().zip(games.iter()) {
+        let (probs, best_move) = arena.get(0).select_move_final(&arena);
+        replay_buffer.push(
+            networks.get_tensor_board(game.get_board(), false), 
+            Tensor::of_slice(&probs).to_kind(Kind::Float).to_device(Device::Cpu),
+            );
+        best_moves.push(best_move);
+    }
+    best_moves
 }

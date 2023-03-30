@@ -46,8 +46,7 @@ impl ChessGame {
     }
 
     fn _make_move(&mut self, _move: ChessMove) -> Option<i8> {
-        let new_board = self.board.clone();
-        new_board.make_move(_move, &mut self.board);
+        self.board = self.board.make_move_new(_move);
 
         match self.board.status() {
             chess::BoardStatus::Checkmate => {
