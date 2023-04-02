@@ -3,13 +3,13 @@ use rand::Rng;
 
 use tch::{ Tensor, Kind, Device };
 
-use crate::replay_buffer::ReplayBuffer;
+use crate::replay_buffer::*;
 use crate::networks::Networks;
 use crate::chess_game::ChessGame;
 
 
 // use std::sync::{Arc, Mutex};
-// use rayon::prelude::*;
+use rayon::prelude::*;
 
 
 
@@ -133,6 +133,8 @@ fn run_mcts_sim(game: &ChessGame, networks: &Networks, node_arena: &mut NodeAren
                               of winning.
     Step 4: Backpropogation - Update the search path with visit_count and evaulation sum.
     */
+    let player = game.get_current_player();
+
     let mut search_path = vec![0];
     let mut arena_idx = 0;
 
@@ -154,7 +156,7 @@ fn run_mcts_sim(game: &ChessGame, networks: &Networks, node_arena: &mut NodeAren
     match value {
         Some(value) => {
             // Backprop
-            let mut factor = game.get_current_player() as f32;
+            let mut factor = (player * game.get_current_player()) as f32;
             for node_idx in search_path.iter().rev() {
                 let node = node_arena.get_mut(*node_idx);
                 node.value_sum += value as f32 * factor;
@@ -191,7 +193,7 @@ fn run_mcts_sim(game: &ChessGame, networks: &Networks, node_arena: &mut NodeAren
             }
 
             // Backprop
-            let mut factor = game.get_current_player() as f32;
+            let mut factor = (player * game.get_current_player()) as f32;
             for node_idx in search_path.iter().rev() {
                 let node = node_arena.get_mut(*node_idx);
                 node.value_sum += values * factor;
@@ -205,11 +207,11 @@ fn run_mcts_sim(game: &ChessGame, networks: &Networks, node_arena: &mut NodeAren
 
 
 fn run_mcts_nsims_multithreaded(
+    orig_games: &Vec<ChessGame>,
     networks: &Networks, 
-    node_arenas: &mut Vec<NodeArena>, 
     num_threads: usize,
     num_sims: usize,
-    ) {
+    ) -> Vec<NodeArena> {
     /*
     MCTS: 4 steps
     Step 1: Selection       - Traverse the tree following maximized UCB until you arrive at a 
@@ -223,6 +225,105 @@ fn run_mcts_nsims_multithreaded(
                               of winning.
     Step 4: Backpropogation - Update the search path with visit_count and evaulation sum.
     */
+    let players = orig_games.iter().map(|g| g.get_current_player()).collect::<Vec<_>>();
+    let root_nodes = vec![Node::new(0.00); orig_games.len()];
+
+    let mut node_arenas = vec![NodeArena::new(); num_threads];
+    for idx in 0..num_threads {
+        node_arenas[idx].push(root_nodes[idx].clone());
+    }
+
+    for _ in 0..num_sims {
+        let mut search_paths = vec![vec![0]; orig_games.len()];
+        let mut games = orig_games.iter().map(|g| g.clone()).collect::<Vec<_>>();
+        let mut values: Vec<Option<i8>> = vec![None; games.len()];
+        let mut arena_idxs = vec![0; games.len()];
+
+        // node_arenas.par_iter_mut().enumerate().for_each(|(idx, arena)| {
+        node_arenas.par_iter_mut().zip(games.par_iter_mut())
+                                  .zip(values.par_iter_mut())
+                                  .zip(arena_idxs.par_iter_mut())
+                                  .zip(search_paths.par_iter_mut())
+                                  .for_each(|((((arena, game), value), arena_idx), search_path)| {
+            let mut new_arena_idx;
+            while arena.get(*arena_idx).child_nodes.len() != 0 {
+                new_arena_idx = arena.get(*arena_idx).select_move(&arena);
+                search_path.push(new_arena_idx);
+                let move_idx = arena.get(*arena_idx).child_nodes.iter()
+                                                                .find(|(_, &v)| v == new_arena_idx)
+                                                                .expect("Move not found").0;
+                *value = game.make_move(*move_idx);
+                *arena_idx = new_arena_idx;
+            }
+        });
+
+        let tensor_board = Tensor::zeros(&[games.len() as i64, 64], (Kind::Int, Device::cuda_if_available()));
+        for (idx, (game, value)) in games.iter_mut().zip(values.iter()).enumerate() {
+            match value {
+                Some(_) => {},
+                None => {
+                    tensor_board.narrow(0, idx as i64, 1).copy_(&networks.get_tensor_board(game.get_board(), true));
+                },
+            }
+        }
+        let (probs_tensor, value_tensor) = match networks.tensor_forward(tensor_board, false) {
+            Some((p, v)) => (p, v),
+            None => panic!("Networks failed to return values")
+        };
+
+        let probs_net: Vec<Vec<f32>> = Vec::from(probs_tensor.to_kind(Kind::Float).to_device(tch::Device::Cpu));
+        let values_net: Vec<f32>     = Vec::from(value_tensor.to_kind(Kind::Float).to_device(tch::Device::Cpu));
+
+        // values.par_iter_mut().enumerate().for_each(|(idx, true_value)| {
+        values.par_iter_mut().zip(games.par_iter_mut())
+                             .zip(probs_net.par_iter())
+                             .zip(values_net.par_iter())
+                             .zip(search_paths.par_iter_mut())
+                             .zip(node_arenas.par_iter_mut())
+                             .zip(arena_idxs.par_iter())
+                             .zip(players.par_iter())
+                             .for_each(|(((((((true_value, game), probs_net), values_net), search_path), node_arena), arena_idx), player)| {
+            // BACKPROP
+            match true_value {
+                Some(value) => {
+                    let mut factor = (player * game.get_current_player()) as f32;
+                    for node_idx in search_path.iter().rev() {
+                        let node = node_arena.get_mut(*node_idx);
+                        node.value_sum += *value as f32 * factor;
+                        node.visit_count += 1;
+                        factor *= -1.00;
+                    }
+                },
+                None => {
+                    // EXPAND
+                    let move_mask = game.get_move_mask();
+                    let mut move_probs = move_mask.iter().zip(probs_net.iter()).map(|(&x, &y)| x * y).collect::<Vec<_>>();
+                    let sum: f32 = move_probs.iter().sum();
+                    move_probs = move_probs.iter().map(|&x| x / sum).collect::<Vec<_>>();
+
+                    for move_idx in 0..1968 {
+                        if move_probs[move_idx] == 0.00 {
+                            continue;
+                        }
+
+                        let child_node = Node::new(move_probs[move_idx]);
+                        let arena_idx_child = node_arena.push(child_node);
+                        node_arena.get_mut(*arena_idx).child_nodes.insert(move_idx, arena_idx_child);
+                    }
+
+                    // BACKPROP
+                    let mut factor = (player * game.get_current_player()) as f32;
+                    for node_idx in search_path.iter().rev() {
+                        let node = node_arena.get_mut(*node_idx);
+                        node.value_sum += values_net * factor;
+                        node.visit_count += 1;
+                        factor *= -1.00;
+                    }
+                }
+            }
+        });
+    }
+    node_arenas
 }
 
 
@@ -254,37 +355,24 @@ pub fn run_mcts(
 pub fn run_mcts_multithreaded(
     games: &Vec<ChessGame>, 
     networks: &Networks, 
-    replay_buffer: &mut ReplayBuffer, 
+    replay_buffer: &mut ReplayBufferMT, 
     num_sims: usize,
     ) -> Vec<usize> {
     let num_threads = games.len();
 
-    let root_nodes = {
-        let mut root_nodes = Vec::new();
-        for _game in games.iter() {
-            root_nodes.push(Node::new(0.00));
-        }
-        root_nodes
-    };
-    let mut node_arenas = {
-        let mut node_arenas = Vec::new();
-        for idx in 0..num_threads {
-            node_arenas.push(NodeArena::new());
-            node_arenas[idx].push(root_nodes[idx].clone());
-        }
-        node_arenas
-    };
 
-    // TODO: Parallelize this
-    run_mcts_nsims_multithreaded(networks, &mut node_arenas, num_threads, num_sims);
+    let node_arenas = run_mcts_nsims_multithreaded(games, networks, num_threads, num_sims);
 
     // Return best move based on mcts
     let mut best_moves = Vec::new();
-    for (arena, game) in node_arenas.iter().zip(games.iter()) {
-        let (probs, best_move) = arena.get(0).select_move_final(&arena);
+
+    // TODO: Append to n_threads episode buffers.
+    for thread_idx in 0..num_threads {
+        let (probs, best_move) = node_arenas[thread_idx].get(0).select_move_final(&node_arenas[thread_idx]);
         replay_buffer.push(
-            networks.get_tensor_board(game.get_board(), false), 
+            networks.get_tensor_board(games[thread_idx].get_board(), false), 
             Tensor::of_slice(&probs).to_kind(Kind::Float).to_device(Device::Cpu),
+            thread_idx,
             );
         best_moves.push(best_move);
     }

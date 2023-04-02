@@ -185,7 +185,7 @@ impl Networks {
         return Some((probs, value));
     }
 
-    fn tensor_forward(&self, tensor_board: Tensor, train: bool) -> Option<(Tensor, Tensor)> {
+    pub fn tensor_forward(&self, tensor_board: Tensor, train: bool) -> Option<(Tensor, Tensor)> {
         // Get probabilities of all moves from policy net.
         // FuncT::forward_t() -> (&Tensor, train: bool) -> Tensor
         /*
@@ -212,7 +212,6 @@ impl Networks {
             false => Tensor::of_slice(&board).to_kind(Kind::Int).to_device(tch::Device::Cpu).unsqueeze(0)
         }
     }
-
 
     pub fn train(&mut self, replay_buffer: &ReplayBuffer, n_iters: i64, batch_size: i64) {
         let two = Tensor::of_slice(&[2.0]).to_kind(Kind::Float).to_device(Device::cuda_if_available());
@@ -243,6 +242,34 @@ impl Networks {
         }
     }
 
+    pub fn train_mt(&mut self, replay_buffer: &ReplayBufferMT, n_iters: i64, batch_size: i64) {
+        let two = Tensor::of_slice(&[2.0]).to_kind(Kind::Float).to_device(Device::cuda_if_available());
+
+        init_progress_bar(n_iters as usize);
+        set_progress_bar_action("Training", Color::Green, Style::Bold);
+        for _ in 0..n_iters {
+            let (target_states, target_probs, target_rewards) = replay_buffer.sample(batch_size);
+
+            let (probs, value) = self.tensor_forward(target_states, true).expect("Forward pass failed");
+
+            let actor_loss = -(target_probs * probs.log()).sum_dim_intlist(Some([-1i64].as_slice()), false, Kind::Float);
+            let critic_loss = (target_rewards - value).pow(&two).sum(Kind::Float) / batch_size;
+            let total_loss = actor_loss.mean(Kind::Float) + critic_loss;
+
+            self.optimizer.backward_step(&total_loss);
+            self.optimizer.zero_grad();
+            inc_progress_bar();
+        }
+        // Save network and optimizer config to file.
+        match self.save("saved_models/networks_test.pth") {
+            Ok(_) => {},
+            Err(e) => println!("Error saving network config: {}", e),
+        }
+        match self.load("saved_models/networks_test.pth") {
+            Ok(_) => {},
+            Err(e) => println!("Error loading network config: {}", e),
+        }
+    }
 
     fn save(&self, filename: &str) -> Result<(), TchError> {
         println!("...Saving Network Config to {}...", filename);

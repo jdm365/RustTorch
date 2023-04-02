@@ -17,32 +17,55 @@ pub mod replay_buffer;
 use crate::replay_buffer::*;
 
 pub mod play_games;
-use crate::play_games::play_game_chess;
+use crate::play_games::*;
 
 
-#[allow(dead_code)]
 fn main() {
     const N_GAMES: usize = 1024;
-    const N_THREADS: usize = 512;
-    const N_MCTS_SIMS: usize = 800;
+    const N_THREADS: usize = 64;
+    const N_MCTS_SIMS: usize = 400;
 
     let move_hash = Arc::new(get_move_hash());
-    // let mut networks = Networks::new(BERT_LARGE_CONFIG);
-    // let mut networks = Networks::new(BERT_BASE_CONFIG);
-    let mut networks = Networks::new(SMALL_CONFIG);
-    // let mut networks = Networks::new(TINY_CONFIG);
 
+    // let config = BERT_LARGE_CONFIG;
+    // let config = BERT_BASE_CONFIG;
+    let config = SMALL_CONFIG;
+    // let config = TINY_CONFIG;
+
+    let mut networks = Networks::new(config);
+
+    /*
     let mut replay_buffer = ReplayBuffer::new(
-        SMALL_CONFIG.replay_buffer_capacity, 
-        SMALL_CONFIG.input_dim, 
-        SMALL_CONFIG.move_dim,
+        config.replay_buffer_capacity, 
+        config.input_dim, 
+        config.move_dim,
+        );
+    */
+
+    let mut replay_buffer = ReplayBufferMT::new(
+        config.replay_buffer_capacity, 
+        config.input_dim, 
+        config.move_dim,
+        N_THREADS as i64,
         );
 
-    let start = std::time::Instant::now();
-    // Single Threaded
+    std::env::set_var("RAYON_NUM_THREADS", N_THREADS.to_string());
+
+    /*
     for _ in 0..N_GAMES {
         play_game_chess(move_hash.clone(), &mut networks, &mut replay_buffer, N_MCTS_SIMS);
     }
-    let end = std::time::Instant::now();
-    println!("Single Thread Time elapsed: {} ms", (end - start).as_millis());
+    */
+
+    for _ in 0..(N_GAMES / N_THREADS) {
+        play_ngames_chess(
+            move_hash.clone(), 
+            &mut networks, 
+            &mut replay_buffer, 
+            N_MCTS_SIMS, 
+            N_THREADS, 
+            40,
+            false
+            );
+    }
 }

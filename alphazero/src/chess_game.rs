@@ -10,7 +10,7 @@ pub struct ChessGame {
     board: Board,
     current_player: i8,
     result: Option<i8>,
-    move_hash: Arc<HashMap<ChessMove, usize>>
+    move_hash: Arc<HashMap<ChessMove, usize>>,
 }
 
 
@@ -178,6 +178,7 @@ impl ChessGame {
 
         return representation;
         }
+
 }
 
 
