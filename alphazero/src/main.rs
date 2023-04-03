@@ -33,6 +33,10 @@ fn main() {
     // let config = TINY_CONFIG;
 
     let mut networks = Networks::new(config);
+    match networks.load("saved_models/networks_test.pth") {
+        Ok(_) => {},
+        Err(x) => println!("Error loading model: {:?}", x),
+    }
 
     /*
     let mut replay_buffer = ReplayBuffer::new(

@@ -328,9 +328,9 @@ fn run_mcts_nsims_multithreaded(
 
 
 pub fn run_mcts(
-    game: &ChessGame, 
-    networks: &Networks, 
-    replay_buffer: &mut ReplayBuffer, 
+    game: &ChessGame,
+    networks: &Networks,
+    replay_buffer: &mut ReplayBuffer,
     n_sims: usize,
     ) -> usize {
     let root = Node::new(0.00);
@@ -366,7 +366,6 @@ pub fn run_mcts_multithreaded(
     // Return best move based on mcts
     let mut best_moves = Vec::new();
 
-    // TODO: Append to n_threads episode buffers.
     for thread_idx in 0..num_threads {
         let (probs, best_move) = node_arenas[thread_idx].get(0).select_move_final(&node_arenas[thread_idx]);
         replay_buffer.push(

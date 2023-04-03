@@ -209,7 +209,7 @@ impl ReplayBufferMT {
         self.episode_probs  = self.episode_probs.zero_();
 
         // Easy way to avoid training on basically no data in beggining.
-        self.n_episodes % 250 == 249
+        self.n_episodes % 100 == 99
     }
 
     pub fn sample(&self, batch_size: i64) -> (Tensor, Tensor, Tensor) {

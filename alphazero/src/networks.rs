@@ -265,10 +265,6 @@ impl Networks {
             Ok(_) => {},
             Err(e) => println!("Error saving network config: {}", e),
         }
-        match self.load("saved_models/networks_test.pth") {
-            Ok(_) => {},
-            Err(e) => println!("Error loading network config: {}", e),
-        }
     }
 
     fn save(&self, filename: &str) -> Result<(), TchError> {
@@ -278,7 +274,7 @@ impl Networks {
     }
 
     #[allow(dead_code)]
-    fn load(&mut self, filename: &str) -> Result<(), TchError> {
+    pub fn load(&mut self, filename: &str) -> Result<(), TchError> {
         println!("...Loading Network Config from {}...", filename);
         self.var_store.load(filename)?;
         Ok(())
